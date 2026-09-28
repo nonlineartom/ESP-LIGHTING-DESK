@@ -45,6 +45,26 @@ static void on_row_long(lv_event_t *e)
     ui_fade_bg(s_rows[idx], ui_col_panel, 500);
 }
 
+static const char *const k_scene_names[] = {
+    "Interview", "Daylight", "Golden hour", "Night", "Moody", "Studio", "Party", "Off",
+};
+
+static void rename_scene_done(const char *name, void *ctx)
+{
+    app_cmd_scene_rename((int)(uintptr_t)ctx, name);
+}
+
+static void on_row_rename(lv_event_t *e)
+{
+    uintptr_t idx = (uintptr_t)lv_event_get_user_data(e);
+    char cur[SCENE_NAME_LEN];
+    app_core_lock();
+    snprintf(cur, sizeof(cur), "%s", g_scenes[idx].name);
+    app_core_unlock();
+    ui_rename_open("Rename scene", cur, SCENE_NAME_LEN - 1, k_scene_names,
+                   (int)(sizeof(k_scene_names) / sizeof(k_scene_names[0])), rename_scene_done, (void *)idx);
+}
+
 static void on_delete_confirm(lv_event_t *e)
 {
     lv_obj_t *mbox = (lv_obj_t *)lv_event_get_user_data(e);
@@ -133,6 +153,14 @@ static lv_obj_t *make_row(int idx)
     lv_obj_align(del, LV_ALIGN_RIGHT_MID, -14, 0);
     lv_obj_add_event_cb(del, on_row_delete, LV_EVENT_CLICKED, (void *)(uintptr_t)idx);
     s_row_del[idx] = del;
+
+    lv_obj_t *ren = lv_label_create(row);
+    lv_label_set_text(ren, LV_SYMBOL_EDIT);
+    lv_obj_set_style_text_color(ren, ui_col_muted, 0);
+    lv_obj_set_style_pad_all(ren, 14, 0);
+    lv_obj_add_flag(ren, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(ren, LV_ALIGN_RIGHT_MID, -64, 0);
+    lv_obj_add_event_cb(ren, on_row_rename, LV_EVENT_CLICKED, (void *)(uintptr_t)idx);
     return row;
 }
 

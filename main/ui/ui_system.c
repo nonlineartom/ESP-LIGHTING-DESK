@@ -26,9 +26,10 @@ static lv_obj_t *s_title;
 static lv_obj_t *s_diag_status;
 static bool      s_open;
 
-/* rename screen */
-static lv_obj_t *s_rename, *s_rename_ta;
-static uint16_t  s_rename_addr;
+/* shared rename screen (lights and scenes) */
+static lv_obj_t *s_rename, *s_rename_ta, *s_rename_title, *s_rename_chips;
+static ui_rename_cb_t s_rename_cb;
+static void          *s_rename_ctx;
 
 static const char *const k_names[] = {
     "Key", "Fill", "Back", "Rim", "Hair", "Top", "Kicker", "Practical",
@@ -54,17 +55,17 @@ static bool current_light(light_t *copy)
 static void rename_close(void)
 {
     if (s_rename) lv_obj_add_flag(s_rename, LV_OBJ_FLAG_HIDDEN);
+    s_rename_cb = NULL;
 }
 
 static void rename_commit(void)
 {
     const char *txt = lv_textarea_get_text(s_rename_ta);
     while (*txt == ' ') txt++;
-    if (s_rename_addr && txt[0]) {
-        app_cmd_rename_light(s_rename_addr, txt);
-        lv_label_set_text(s_card_name, txt);
-    }
+    ui_rename_cb_t cb = s_rename_cb;
+    void *ctx = s_rename_ctx;
     rename_close();
+    if (cb && txt[0]) cb(txt, ctx);
 }
 
 static void on_rename_kb(lv_event_t *e)
@@ -79,8 +80,8 @@ static void on_rename_cancel(lv_event_t *e) { (void)e; rename_close(); }
 
 static void on_rename_chip(lv_event_t *e)
 {
-    const char *name = (const char *)lv_event_get_user_data(e);
-    lv_textarea_set_text(s_rename_ta, name);
+    lv_obj_t *chip = lv_event_get_target(e);
+    lv_textarea_set_text(s_rename_ta, lv_label_get_text(lv_obj_get_child(chip, 0)));
 }
 
 static void build_rename(void)
@@ -95,14 +96,12 @@ static void build_rename(void)
     lv_obj_set_style_pad_all(s_rename, 0, 0);
     lv_obj_remove_flag(s_rename, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
 
-    lv_obj_t *title = lv_label_create(s_rename);
-    lv_label_set_text(title, "Rename light");
-    lv_obj_set_style_text_font(title, ui_font_medium, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 62);
+    s_rename_title = lv_label_create(s_rename);
+    lv_obj_set_style_text_font(s_rename_title, ui_font_medium, 0);
+    lv_obj_align(s_rename_title, LV_ALIGN_TOP_MID, 0, 62);
 
     s_rename_ta = lv_textarea_create(s_rename);
     lv_textarea_set_one_line(s_rename_ta, true);
-    lv_textarea_set_max_length(s_rename_ta, LIGHT_NAME_LEN - 1);
     lv_obj_set_size(s_rename_ta, 440, 60);
     lv_obj_align(s_rename_ta, LV_ALIGN_TOP_MID, 0, 112);
     lv_obj_set_style_text_font(s_rename_ta, ui_font_medium, 0);
@@ -110,13 +109,14 @@ static void build_rename(void)
     lv_obj_set_style_border_color(s_rename_ta, ui_col_accent, LV_STATE_FOCUSED);
     lv_obj_set_style_radius(s_rename_ta, 18, 0);
 
-    /* quick studio names, two rows */
-    for (unsigned i = 0; i < NAME_COUNT; i++) {
-        lv_obj_t *c = ui_make_pill(s_rename, k_names[i], 112, 44, ui_col_panel_hi, ui_font_small);
-        int row = i / 4, col = i % 4;
-        lv_obj_set_pos(c, UI_CX - 242 + col * 122, 190 + row * 54);
-        lv_obj_add_event_cb(c, on_rename_chip, LV_EVENT_CLICKED, (void *)k_names[i]);
-    }
+    /* suggestion chips, up to two rows of four */
+    s_rename_chips = lv_obj_create(s_rename);
+    lv_obj_set_size(s_rename_chips, 500, 108);
+    lv_obj_align(s_rename_chips, LV_ALIGN_TOP_MID, 0, 188);
+    lv_obj_set_style_bg_opa(s_rename_chips, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_rename_chips, 0, 0);
+    lv_obj_set_style_pad_all(s_rename_chips, 0, 0);
+    lv_obj_remove_flag(s_rename_chips, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *kb = lv_keyboard_create(s_rename);
     lv_obj_set_size(kb, 560, 250);
@@ -138,6 +138,32 @@ static void build_rename(void)
     lv_obj_add_flag(s_rename, LV_OBJ_FLAG_HIDDEN);
 }
 
+void ui_rename_open(const char *title, const char *initial, int max_len,
+                    const char *const *chips, int nchips, ui_rename_cb_t cb, void *ctx)
+{
+    if (!s_rename) build_rename();
+    lv_label_set_text(s_rename_title, title);
+    lv_textarea_set_max_length(s_rename_ta, (uint32_t)max_len);
+    lv_textarea_set_text(s_rename_ta, initial ? initial : "");
+    lv_obj_clean(s_rename_chips);
+    for (int i = 0; i < nchips && i < 8; i++) {
+        lv_obj_t *c = ui_make_pill(s_rename_chips, chips[i], 112, 44, ui_col_panel_hi, ui_font_small);
+        lv_obj_set_pos(c, 6 + (i % 4) * 122, (i / 4) * 54);
+        lv_obj_add_event_cb(c, on_rename_chip, LV_EVENT_CLICKED, NULL);
+    }
+    s_rename_cb = cb;
+    s_rename_ctx = ctx;
+    lv_obj_remove_flag(s_rename, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_rename);
+}
+
+static void rename_light_done(const char *name, void *ctx)
+{
+    uint16_t addr = (uint16_t)(uintptr_t)ctx;
+    app_cmd_rename_light(addr, name);
+    if (s_card_name) lv_label_set_text(s_card_name, name);
+}
+
 static void on_rename(lv_event_t *e)
 {
     (void)e;
@@ -148,11 +174,8 @@ void ui_system_show_rename(void)
 {
     light_t l;
     if (!current_light(&l)) return;
-    if (!s_rename) build_rename();
-    s_rename_addr = l.addr;
-    lv_textarea_set_text(s_rename_ta, l.name);
-    lv_obj_remove_flag(s_rename, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_rename);
+    ui_rename_open("Rename light", l.name, LIGHT_NAME_LEN - 1, k_names, (int)NAME_COUNT,
+                   rename_light_done, (void *)(uintptr_t)l.addr);
 }
 
 /* ------------------------------------------------------------------------- */

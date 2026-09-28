@@ -85,6 +85,12 @@ void ui_system_set_open(bool open, bool animate);
 bool ui_system_is_open(void);
 void ui_system_show_rename(void);         /* keyboard rename of the current light */
 
+/* Full-screen keyboard entry with up to 8 suggestion chips; cb runs with the
+ * trimmed, non-empty text on Save / Enter (not on Cancel). */
+typedef void (*ui_rename_cb_t)(const char *text, void *ctx);
+void ui_rename_open(const char *title, const char *initial, int max_len,
+                    const char *const *chips, int nchips, ui_rename_cb_t cb, void *ctx);
+
 void ui_pair_refresh(void);
 
 #ifdef __cplusplus

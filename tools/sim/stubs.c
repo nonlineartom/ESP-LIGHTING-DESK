@@ -175,6 +175,12 @@ void app_cmd_scene_recall(int idx)
     s_last_scene = idx;
     ui_notify_lights_changed();
 }
+void app_cmd_scene_rename(int idx, const char *name)
+{
+    scene_t *sc = scenes_get(idx);
+    if (sc) snprintf(sc->name, sizeof(sc->name), "%s", name);
+    ui_notify_lights_changed();
+}
 void app_cmd_scene_delete(int idx)
 {
     printf("[cmd] scene delete %d\n", idx);

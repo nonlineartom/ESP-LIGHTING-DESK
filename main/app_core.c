@@ -59,7 +59,7 @@ typedef enum {
     CMD_REMOVE, CMD_FACTORY_RESET, CMD_RENAME,
     CMD_MASTER, CMD_ALL_POWER, CMD_ALL_CCT,
     CMD_SCENE_SAVE, CMD_SCENE_RECALL, CMD_SCENE_DELETE,
-    CMD_SET_FADE, CMD_DIAG_LIGHTNESS, CMD_FX, CMD_IDENTIFY,
+    CMD_SET_FADE, CMD_DIAG_LIGHTNESS, CMD_FX, CMD_IDENTIFY, CMD_SCENE_RENAME,
 } cmd_type_t;
 
 typedef struct {
@@ -322,6 +322,15 @@ void app_cmd_diag_lightness(uint16_t addr, uint16_t lightness, uint8_t trans)
     post_cmd(CMD_DIAG_LIGHTNESS, addr, lightness, trans, 0, false, NULL);
 }
 int      app_core_last_scene(void)                   { return s_last_scene; }
+
+void app_cmd_scene_rename(int idx, const char *name)
+{
+    app_event_t ev = { .kind = EV_CMD };
+    ev.cmd.type = CMD_SCENE_RENAME;
+    ev.cmd.c = idx;
+    snprintf(ev.cmd.name, sizeof(ev.cmd.name), "%s", name ? name : "");
+    post(&ev);
+}
 
 void app_cmd_rename_light(uint16_t addr, const char *name)
 {
@@ -1595,6 +1604,17 @@ static void on_cmd(const app_event_t *ev)
             vTaskDelay(pdMS_TO_TICKS(350));
         }
         schedule_refresh(il->addr);
+        break;
+    }
+
+    case CMD_SCENE_RENAME: {
+        scene_t *sc = scenes_get(ev->cmd.c);
+        if (!sc || !sc->used || !ev->cmd.name[0]) break;
+        app_core_lock();
+        snprintf(sc->name, sizeof(sc->name), "%.*s", (int)sizeof(sc->name) - 1, ev->cmd.name);
+        app_core_unlock();
+        store_save_scenes();
+        ui_notify_lights_changed();
         break;
     }
 
