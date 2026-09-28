@@ -24,6 +24,7 @@ static lv_obj_t *s_btn_remove;
 static lv_obj_t *s_btn_reset;
 static lv_obj_t *s_title;
 static lv_obj_t *s_diag_status;
+static lv_obj_t *s_bl_slider;
 static bool      s_open;
 
 /* shared rename screen (lights and scenes) */
@@ -259,6 +260,12 @@ static void on_diag(lv_event_t *e)
 
 static void on_close(lv_event_t *e) { (void)e; ui_system_set_open(false, true); }
 
+static void on_backlight(lv_event_t *e)
+{
+    bool release = lv_event_get_code(e) == LV_EVENT_RELEASED;
+    ui_set_backlight_level((int)lv_slider_get_value(s_bl_slider), release);
+}
+
 static lv_obj_t *centered_label(lv_obj_t *parent, const lv_font_t *font, lv_color_t col, int w, int y)
 {
     lv_obj_t *l = lv_label_create(parent);
@@ -339,13 +346,31 @@ void ui_system_create(lv_obj_t *screen)
     lv_obj_align(s_btn_remove, LV_ALIGN_TOP_MID, 0, 410);
     lv_obj_add_event_cb(s_btn_remove, on_remove, LV_EVENT_CLICKED, NULL);
 
-    s_btn_reset = centered_label(s_sheet, ui_font_small, ui_col_muted, 220, 478);
+    /* display brightness */
+    lv_obj_t *bl_lbl = lv_label_create(s_sheet);
+    lv_label_set_text(bl_lbl, "Display");
+    lv_obj_set_style_text_font(bl_lbl, ui_font_small, 0);
+    lv_obj_set_style_text_color(bl_lbl, ui_col_muted, 0);
+    lv_obj_set_pos(bl_lbl, UI_CX - 205, 480);
+    s_bl_slider = lv_slider_create(s_sheet);
+    lv_obj_set_size(s_bl_slider, 280, 14);
+    lv_obj_set_pos(s_bl_slider, UI_CX - 110, 486);
+    lv_slider_set_range(s_bl_slider, 10, 100);
+    lv_obj_set_style_bg_color(s_bl_slider, ui_col_track, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_bl_slider, ui_col_text, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(s_bl_slider, ui_col_text, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(s_bl_slider, 7, LV_PART_KNOB);
+    lv_obj_set_ext_click_area(s_bl_slider, 14);
+    lv_obj_add_event_cb(s_bl_slider, on_backlight, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(s_bl_slider, on_backlight, LV_EVENT_RELEASED, NULL);
+
+    s_btn_reset = centered_label(s_sheet, ui_font_small, ui_col_muted, 220, 516);
     lv_label_set_text(s_btn_reset, "Factory reset");
     lv_obj_set_style_pad_all(s_btn_reset, 10, 0);
     lv_obj_add_flag(s_btn_reset, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_btn_reset, on_reset, LV_EVENT_CLICKED, NULL);
 
-    s_diag_status = centered_label(s_sheet, ui_font_small, ui_col_warn, 420, 526);
+    s_diag_status = centered_label(s_sheet, ui_font_small, ui_col_warn, 420, 552);
     lv_obj_add_flag(s_diag_status, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *handle = ui_make_handle(s_sheet);
@@ -365,6 +390,8 @@ void ui_system_refresh(void)
     if (st == LINK_ONLINE) col = ui_col_ok;
     else if (st == LINK_SCANNING || st == LINK_CONNECTING || st == LINK_PAIRING) col = ui_col_accent;
     lv_obj_set_style_text_color(s_link_text, col, 0);
+    if (!lv_obj_has_state(s_bl_slider, LV_STATE_PRESSED))
+        lv_slider_set_value(s_bl_slider, ui_backlight_level(), LV_ANIM_OFF);
     lv_label_set_text_fmt(s_link_text, LV_SYMBOL_BLUETOOTH "  %s", app_core_link_text());
 
     light_t l;

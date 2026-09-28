@@ -7,6 +7,7 @@
 #include "app_core.h"
 
 #ifndef MESHDECK_HOST_SIM
+#include "board.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 static const char *TAG = "ui";
@@ -263,6 +264,57 @@ void ui_fade_shadow(lv_obj_t *obj, lv_color_t to, uint32_t ms)
 /* init + navigation                                                          */
 /* ------------------------------------------------------------------------- */
 
+/* ---- display brightness and idle dimming -------------------------------- */
+
+#define DIM_AFTER_MS   120000
+#define DIM_LEVEL      8
+
+static int       s_bl_user = 100;     /* percent, from the system sheet */
+static bool      s_dimmed;
+static lv_obj_t *s_wake_shield;
+
+static void backlight_apply(int pct)
+{
+#ifndef MESHDECK_HOST_SIM
+    board_backlight_set(pct);
+#else
+    (void)pct;
+#endif
+}
+
+static void on_wake(lv_event_t *e)
+{
+    (void)e;
+    /* the touch that wakes the screen does nothing else */
+    lv_obj_add_flag(s_wake_shield, LV_OBJ_FLAG_HIDDEN);
+    s_dimmed = false;
+    backlight_apply(s_bl_user);
+    lv_display_trigger_activity(NULL);
+}
+
+static void idle_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    uint32_t idle = lv_display_get_inactive_time(NULL);
+    if (!s_dimmed && idle > DIM_AFTER_MS) {
+        s_dimmed = true;
+        backlight_apply(s_bl_user < DIM_LEVEL ? s_bl_user : DIM_LEVEL);
+        lv_obj_remove_flag(s_wake_shield, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_wake_shield);
+    }
+}
+
+int ui_backlight_level(void) { return s_bl_user; }
+
+void ui_set_backlight_level(int pct, bool save)
+{
+    if (pct < 10) pct = 10;
+    if (pct > 100) pct = 100;
+    s_bl_user = pct;
+    if (!s_dimmed) backlight_apply(pct);
+    if (save) app_cmd_save_setting("backlight", (uint16_t)pct);
+}
+
 void ui_init(void)
 {
     ui_font_small  = &lv_font_montserrat_20;
@@ -299,6 +351,17 @@ void ui_init(void)
     }
     lv_screen_load(s_desk);
     s_current = SCR_DESK;
+
+    s_wake_shield = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(s_wake_shield, UI_W, UI_H);
+    lv_obj_set_style_bg_opa(s_wake_shield, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_wake_shield, 0, 0);
+    lv_obj_remove_flag(s_wake_shield, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_wake_shield, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_wake_shield, on_wake, LV_EVENT_PRESSED, NULL);
+    s_bl_user = app_core_setting("backlight", 100);
+    ui_set_backlight_level(s_bl_user, false);
+    lv_timer_create(idle_timer_cb, 500, NULL);
     s_ui_ready = true;
     UI_LOGI("ui ready");
 }

@@ -37,6 +37,10 @@ void ui_notify_pair_changed(void);
 void ui_show_desk(void);
 void ui_show_pair(void);
 
+/* display brightness (10..100 %), dimmed automatically after 2 min idle */
+int  ui_backlight_level(void);
+void ui_set_backlight_level(int pct, bool save);
+
 /* ---- theme ---------------------------------------------------------------- */
 extern const lv_font_t *ui_font_small;    /* 20 */
 extern const lv_font_t *ui_font_normal;   /* 24 */

@@ -59,7 +59,7 @@ typedef enum {
     CMD_REMOVE, CMD_FACTORY_RESET, CMD_RENAME,
     CMD_MASTER, CMD_ALL_POWER, CMD_ALL_CCT,
     CMD_SCENE_SAVE, CMD_SCENE_RECALL, CMD_SCENE_DELETE,
-    CMD_SET_FADE, CMD_DIAG_LIGHTNESS, CMD_FX, CMD_IDENTIFY, CMD_SCENE_RENAME,
+    CMD_SET_FADE, CMD_DIAG_LIGHTNESS, CMD_FX, CMD_IDENTIFY, CMD_SCENE_RENAME, CMD_SETTING,
 } cmd_type_t;
 
 typedef struct {
@@ -322,6 +322,21 @@ void app_cmd_diag_lightness(uint16_t addr, uint16_t lightness, uint8_t trans)
     post_cmd(CMD_DIAG_LIGHTNESS, addr, lightness, trans, 0, false, NULL);
 }
 int      app_core_last_scene(void)                   { return s_last_scene; }
+
+uint16_t app_core_setting(const char *key, uint16_t def)
+{
+    uint16_t v;
+    return store_load_u16(key, &v) == 0 ? v : def;
+}
+
+void app_cmd_save_setting(const char *key, uint16_t value)
+{
+    app_event_t ev = { .kind = EV_CMD };
+    ev.cmd.type = CMD_SETTING;
+    ev.cmd.a = value;
+    snprintf(ev.cmd.name, sizeof(ev.cmd.name), "%s", key);
+    post(&ev);
+}
 
 void app_cmd_scene_rename(int idx, const char *name)
 {
@@ -1606,6 +1621,10 @@ static void on_cmd(const app_event_t *ev)
         schedule_refresh(il->addr);
         break;
     }
+
+    case CMD_SETTING:
+        if (ev->cmd.name[0]) store_save_u16(ev->cmd.name, ev->cmd.a);   /* NVS keys: max 15 chars */
+        break;
 
     case CMD_SCENE_RENAME: {
         scene_t *sc = scenes_get(ev->cmd.c);

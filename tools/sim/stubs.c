@@ -175,6 +175,8 @@ void app_cmd_scene_recall(int idx)
     s_last_scene = idx;
     ui_notify_lights_changed();
 }
+uint16_t app_core_setting(const char *key, uint16_t def) { (void)key; return def; }
+void app_cmd_save_setting(const char *key, uint16_t v) { printf("[cmd] setting %s=%u\n", key, v); }
 void app_cmd_scene_rename(int idx, const char *name)
 {
     scene_t *sc = scenes_get(idx);

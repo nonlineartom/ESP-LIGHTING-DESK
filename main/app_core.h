@@ -90,6 +90,10 @@ void app_cmd_scene_save(int idx);                      /* -1 = new slot; existin
 void app_cmd_scene_recall(int idx);
 void app_cmd_scene_delete(int idx);
 void app_cmd_scene_rename(int idx, const char *name);
+/* Small persisted UI settings (NVS u16; key up to 15 characters).  Reading
+ * is direct, saving goes through the core task. */
+uint16_t app_core_setting(const char *key, uint16_t def);
+void     app_cmd_save_setting(const char *key, uint16_t value);
 int  app_core_last_scene(void);                        /* last recalled scene or -1 */
 void app_cmd_set_fade_ms(uint16_t ms);                 /* scene crossfade time, 0 = snap; persisted */
 uint16_t app_core_fade_ms(void);
