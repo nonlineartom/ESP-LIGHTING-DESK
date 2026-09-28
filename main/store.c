@@ -179,6 +179,25 @@ int store_save_scenes(void)
     return err == ESP_OK ? 0 : -1;
 }
 
+int store_load_u16(const char *key, uint16_t *out)
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return -1;
+    esp_err_t err = nvs_get_u16(h, key, out);
+    nvs_close(h);
+    return err == ESP_OK ? 0 : -1;
+}
+
+int store_save_u16(const char *key, uint16_t v)
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return -1;
+    esp_err_t err = nvs_set_u16(h, key, v);
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    return err == ESP_OK ? 0 : -1;
+}
+
 int store_erase(void)
 {
     nvs_handle_t h;

@@ -16,6 +16,8 @@ int  store_load_lights(void);       /* into g_lights */
 int  store_save_lights(void);       /* from g_lights */
 int  store_load_scenes(void);      /* into g_scenes */
 int  store_save_scenes(void);
+int  store_load_u16(const char *key, uint16_t *out);
+int  store_save_u16(const char *key, uint16_t v);
 int  store_erase(void);
 
 #ifdef __cplusplus

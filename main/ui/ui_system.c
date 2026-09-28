@@ -99,6 +99,21 @@ static void on_reset(lv_event_t *e)
     lv_obj_center(mbox);
 }
 
+/* Hidden diagnostic: long-press the "MeshDeck" label to send a standard
+ * Light Lightness Set with a 1 s transition to the current channel
+ * (alternating 50 % / 100 %).  Watch the fixture and the serial log. */
+static void on_diag(lv_event_t *e)
+{
+    (void)e;
+    static bool high;
+    uint16_t addr = ui_desk_current_addr();
+    if (!addr) return;
+    high = !high;
+    app_cmd_diag_lightness(addr, high ? 0xFFFF : 0x8000, 10 /* 10 x 100 ms */);
+    lv_label_set_text_fmt(s_hint, "diag: lightness %s, 1 s transition", high ? "100%" : "50%");
+    lv_obj_set_style_text_color(s_hint, ui_col_warn, 0);
+}
+
 static void on_sheet_gesture(lv_event_t *e)
 {
     (void)e;
@@ -165,6 +180,9 @@ void ui_system_create(lv_obj_t *screen)
     lv_obj_set_style_text_font(s_hint, ui_font_small, 0);
     lv_obj_set_style_text_color(s_hint, ui_col_track, 0);
     lv_obj_align(s_hint, LV_ALIGN_TOP_MID, 0, 24);
+    lv_obj_set_style_pad_all(s_hint, 12, 0);
+    lv_obj_add_flag(s_hint, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_hint, on_diag, LV_EVENT_LONG_PRESSED, NULL);
 
     lv_obj_t *handle = ui_make_handle(s_sheet);
     lv_obj_align(handle, LV_ALIGN_BOTTOM_MID, 0, -14);

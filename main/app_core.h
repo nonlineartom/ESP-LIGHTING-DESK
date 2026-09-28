@@ -81,6 +81,14 @@ void app_cmd_scene_save(int idx);                      /* -1 = new slot; existin
 void app_cmd_scene_recall(int idx);
 void app_cmd_scene_delete(int idx);
 int  app_core_last_scene(void);                        /* last recalled scene or -1 */
+void app_cmd_set_fade_ms(uint16_t ms);                 /* scene crossfade time, 0 = snap; persisted */
+uint16_t app_core_fade_ms(void);
+bool app_core_fade_active(void);
+
+/* Diagnostics for the hardware session: standard-model Light Lightness Set
+ * with a transition time.  If the fixture dims smoothly, fades can be
+ * offloaded to the light instead of stepped from here. */
+void app_cmd_diag_lightness(uint16_t addr, uint16_t lightness_0_65535, uint8_t transition_100ms);
 
 #ifdef __cplusplus
 }

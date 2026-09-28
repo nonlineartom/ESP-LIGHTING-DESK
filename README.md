@@ -164,7 +164,9 @@ unknown (we bind all of them), and the C6 factory image may lack Bluetooth.
   band between colour temperature + green/magenta arcs and a hue wheel +
   saturation arc.
 * **Swipe up** for Scenes: tap to recall, long-press to overwrite with the
-  current look, bin to delete, "+" to save the current look.
+  current look, bin to delete, "+" to save the current look.  The **Fade**
+  row sets the crossfade (Snap / 1 s / 2 s / 5 s); fades are stepped from the
+  controller within a configurable mesh message budget.
 * **Swipe down** for the system sheet: link status, pair a light, rename the
   current light (cycles studio names), remove it, factory reset.
 

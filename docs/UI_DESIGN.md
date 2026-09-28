@@ -71,8 +71,10 @@ targets, no precision taps, no menus that need reading.
   bottom rim) so the list itself reads as round.
 * Each pill: name, a row of small colour discs (one per light, the scene's
   look), and the recall status.
-* **Tap** recalls (0.6 s UI crossfade; the fixtures snap since the Sidus
-  protocol has no transition time).  **Long-press** overwrites the scene
+* **Tap** recalls.  A **Fade** selector (Snap / 1 s / 2 s / 5 s) sets the
+  crossfade: the controller steps every light from its current look to the
+  scene's look (the Sidus protocol has no transition time of its own), within a
+  mesh budget of `FADE_MSGS_PER_SEC` messages per second shared by all lights.  **Long-press** overwrites the scene
   with the current look.  **Swipe right** on a pill reveals delete.
   **+** at the bottom saves the current look as a new scene (name is
   auto-numbered; rename in a later phase).

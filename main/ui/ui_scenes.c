@@ -23,6 +23,9 @@ static lv_obj_t *s_row_discs[SCENES_MAX][LIGHTS_MAX];
 static lv_obj_t *s_row_del[SCENES_MAX];
 static lv_obj_t *s_add;
 static lv_obj_t *s_empty;
+static lv_obj_t *s_fade_btn[4];
+static const uint16_t k_fade_ms[4] = { 0, 1000, 2000, 5000 };
+static const char *const k_fade_txt[4] = { "Snap", "1 s", "2 s", "5 s" };
 static bool      s_open;
 static int       s_pending_delete = -1;
 
@@ -62,6 +65,23 @@ static void on_row_delete(lv_event_t *e)
     lv_msgbox_add_close_button(mbox);
     lv_obj_set_width(mbox, 360);
     lv_obj_center(mbox);
+}
+
+static void refresh_fade_buttons(void)
+{
+    uint16_t cur = app_core_fade_ms();
+    for (int i = 0; i < 4; i++) {
+        bool sel = (k_fade_ms[i] == cur);
+        lv_obj_set_style_bg_color(s_fade_btn[i], sel ? ui_col_accent : ui_col_panel, 0);
+        lv_obj_set_style_text_color(lv_obj_get_child(s_fade_btn[i], 0), sel ? ui_col_accent_dark : ui_col_text, 0);
+    }
+}
+
+static void on_fade(lv_event_t *e)
+{
+    uintptr_t i = (uintptr_t)lv_event_get_user_data(e);
+    app_cmd_set_fade_ms(k_fade_ms[i]);
+    refresh_fade_buttons();
 }
 
 static void on_add(lv_event_t *e)
@@ -151,9 +171,21 @@ void ui_scenes_create(lv_obj_t *screen)
     lv_obj_set_style_text_font(s_title, ui_font_medium, 0);
     lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, 34);
 
+    /* fade time selector: Snap / 1 s / 2 s / 5 s */
+    lv_obj_t *fl = lv_label_create(s_drawer);
+    lv_label_set_text(fl, "Fade");
+    lv_obj_set_style_text_font(fl, ui_font_small, 0);
+    lv_obj_set_style_text_color(fl, ui_col_muted, 0);
+    lv_obj_align(fl, LV_ALIGN_TOP_MID, -180, 82);
+    for (int i = 0; i < 4; i++) {
+        s_fade_btn[i] = ui_make_pill(s_drawer, k_fade_txt[i], 78, 36, ui_col_panel, ui_font_small);
+        lv_obj_align(s_fade_btn[i], LV_ALIGN_TOP_MID, -84 + i * 86, 72);
+        lv_obj_add_event_cb(s_fade_btn[i], on_fade, LV_EVENT_CLICKED, (void *)(uintptr_t)i);
+    }
+
     s_list = lv_obj_create(s_drawer);
-    lv_obj_set_size(s_list, ROW_W + 24, 400);
-    lv_obj_align(s_list, LV_ALIGN_TOP_MID, 0, 80);
+    lv_obj_set_size(s_list, ROW_W + 24, 366);
+    lv_obj_align(s_list, LV_ALIGN_TOP_MID, 0, 118);
     lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
     lv_obj_set_style_pad_all(s_list, 6, 0);
@@ -185,6 +217,7 @@ void ui_scenes_create(lv_obj_t *screen)
 void ui_scenes_refresh(void)
 {
     if (!s_drawer) return;
+    refresh_fade_buttons();
     int last = app_core_last_scene();
     app_core_lock();
     int shown = 0;

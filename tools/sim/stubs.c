@@ -16,6 +16,7 @@ static char         s_pair_text[48] = "";
 static int          s_pair_pct;
 static uint16_t     s_master = 1000;
 static int          s_last_scene = -1;
+static uint16_t     s_fade_ms = 1000;
 static unprov_dev_t s_unprov[UNPROV_MAX];
 static int          s_unprov_n;
 
@@ -52,6 +53,10 @@ const char  *app_core_pair_text(void) { return s_pair_text; }
 int          app_core_pair_percent(void) { return s_pair_pct; }
 uint16_t     app_core_master_level(void) { return s_master; }
 int          app_core_last_scene(void) { return s_last_scene; }
+uint16_t     app_core_fade_ms(void) { return s_fade_ms; }
+bool         app_core_fade_active(void) { return false; }
+void app_cmd_set_fade_ms(uint16_t ms) { printf("[cmd] fade %u\n", ms); s_fade_ms = ms; }
+void app_cmd_diag_lightness(uint16_t addr, uint16_t l, uint8_t t) { printf("[cmd] diag lightness 0x%04x %u %u\n", addr, l, t); }
 int app_core_unprov_list(unprov_dev_t *out, int max)
 {
     int n = s_unprov_n < max ? s_unprov_n : max;

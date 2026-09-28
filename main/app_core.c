@@ -33,11 +33,19 @@ static const char *TAG = "core";
 #define CFG_RETRIES         3
 #define UNPROV_EXPIRE_MS    15000
 
+/* Scene crossfades are stepped from the controller (the Sidus 0x26 protocol
+ * has no transition time).  FADE_MSGS_PER_SEC is the total mesh budget:
+ * with N lights each gets FADE_MSGS_PER_SEC / N updates per second.  Raise it
+ * once the proxy's real throughput has been measured on hardware. */
+#define FADE_MSGS_PER_SEC   20
+#define FADE_MIN_STEP_MS    100
+#define FADE_DEFAULT_MS     1000
+
 /* ------------------------------------------------------------------------- */
 /* events                                                                     */
 /* ------------------------------------------------------------------------- */
 
-typedef enum { EV_BLE, EV_CMD, EV_TICK } ev_kind_t;
+typedef enum { EV_BLE, EV_CMD, EV_TICK, EV_FADE } ev_kind_t;
 
 typedef enum {
     CMD_PAIR_START, CMD_PAIR_SELECT, CMD_PAIR_CANCEL,
@@ -45,6 +53,7 @@ typedef enum {
     CMD_REMOVE, CMD_FACTORY_RESET, CMD_RENAME,
     CMD_MASTER, CMD_ALL_POWER, CMD_ALL_CCT,
     CMD_SCENE_SAVE, CMD_SCENE_RECALL, CMD_SCENE_DELETE,
+    CMD_SET_FADE, CMD_DIAG_LIGHTNESS,
 } cmd_type_t;
 
 typedef struct {
@@ -98,6 +107,28 @@ static mesh_prov_t        s_prov;
 static uint32_t           s_seq_saved;
 static uint16_t           s_master = 1000;   /* grand master 0..1000 */
 static int                s_last_scene = -1;
+static uint16_t           s_fade_ms = FADE_DEFAULT_MS;
+static esp_timer_handle_t s_fade_timer;
+
+typedef struct {
+    uint16_t addr;
+    bool     on0, on1;
+    uint8_t  mode1;
+    uint16_t lvl0, lvl1;      /* effective levels (0 when off) */
+    uint16_t cct0, cct1;
+    int8_t   gm0, gm1;
+    uint16_t hue0, hue1;
+    uint8_t  sat0, sat1;
+} fade_light_t;
+
+static struct {
+    bool     active;
+    int      step, steps;
+    uint32_t step_ms;
+    int      count;
+    int      scene;
+    fade_light_t l[LIGHTS_MAX];
+} s_fade;
 
 static uint16_t s_proxy_addr;          /* light we are connected through */
 static uint16_t s_target_addr;         /* light we want to connect to (0 = any) */
@@ -259,6 +290,13 @@ void app_cmd_scene_save(int idx)                     { post_cmd(CMD_SCENE_SAVE, 
 void app_cmd_scene_recall(int idx)                   { post_cmd(CMD_SCENE_RECALL, 0, 0, 0, idx, false, NULL); }
 void app_cmd_scene_delete(int idx)                   { post_cmd(CMD_SCENE_DELETE, 0, 0, 0, idx, false, NULL); }
 uint16_t app_core_master_level(void)                 { return s_master; }
+void app_cmd_set_fade_ms(uint16_t ms)                { post_cmd(CMD_SET_FADE, 0, ms, 0, 0, false, NULL); }
+uint16_t app_core_fade_ms(void)                      { return s_fade_ms; }
+bool     app_core_fade_active(void)                  { return s_fade.active; }
+void app_cmd_diag_lightness(uint16_t addr, uint16_t lightness, uint8_t trans)
+{
+    post_cmd(CMD_DIAG_LIGHTNESS, addr, lightness, trans, 0, false, NULL);
+}
 int      app_core_last_scene(void)                   { return s_last_scene; }
 
 void app_cmd_rename_light(uint16_t addr, const char *name)
@@ -932,21 +970,148 @@ static void apply_master(void)
     }
 }
 
+/* ---- fade engine ---------------------------------------------------------- */
+
+static void fade_timer_cb(void *arg)
+{
+    (void)arg;
+    app_event_t ev = { .kind = EV_FADE };
+    xQueueSend(s_queue, &ev, 0);
+}
+
+static void fade_stop(void)
+{
+    if (!s_fade.active) return;
+    s_fade.active = false;
+    esp_timer_stop(s_fade_timer);
+}
+
+static int lerp(int a, int b, int step, int steps)
+{
+    return a + ((b - a) * step) / steps;
+}
+
+static int lerp_hue(int a, int b, int step, int steps)
+{
+    int d = b - a;
+    if (d > 180) d -= 360;
+    if (d < -180) d += 360;
+    int h = (a + (d * step) / steps) % 360;
+    return h < 0 ? h + 360 : h;
+}
+
+/* One interpolation step for every light in the fade (called from the core task). */
+static void fade_step(void)
+{
+    if (!s_fade.active) return;
+    s_fade.step++;
+    bool last = (s_fade.step >= s_fade.steps);
+    int st = s_fade.step, n = s_fade.steps;
+
+    for (int i = 0; i < s_fade.count; i++) {
+        fade_light_t *f = &s_fade.l[i];
+        light_t *l = lights_find_by_addr(f->addr);
+        if (!l) continue;
+        uint16_t lvl = (uint16_t)lerp(f->lvl0, f->lvl1, st, n);
+        uint16_t cct = (uint16_t)lerp(f->cct0, f->cct1, st, n);
+        int gm = lerp(f->gm0, f->gm1, st, n);
+        uint16_t hue = (uint16_t)lerp_hue(f->hue0, f->hue1, st, n);
+        uint8_t sat = (uint8_t)lerp(f->sat0, f->sat1, st, n);
+        light_mode_t mode = (light_mode_t)f->mode1;
+        uint8_t p[10];
+
+        if (st == 1 && !f->on0 && f->on1) {      /* wake first, from black */
+            telink_onoff(true, p);
+            send_telink(f->addr, p);
+            vTaskDelay(pdMS_TO_TICKS(15));
+        }
+        if (mode == LIGHT_MODE_HSI) telink_hsi(hue, sat, scaled(lvl), p);
+        else                        telink_cct(cct, scaled(lvl), gm, p);
+        send_telink(f->addr, p);
+        if (last && !f->on1) {                   /* faded to black: now sleep */
+            vTaskDelay(pdMS_TO_TICKS(15));
+            telink_onoff(false, p);
+            send_telink(f->addr, p);
+        }
+
+        app_core_lock();
+        l->state.on = last ? f->on1 : (f->on0 || f->on1);
+        l->state.mode = mode;
+        l->state.level = last ? (f->on1 ? f->lvl1 : l->state.level) : lvl;
+        l->state.intensity = scaled(l->state.level);
+        if (mode == LIGHT_MODE_HSI) { l->state.hue = hue; l->state.sat = sat; }
+        else                        { l->state.cct = cct; l->state.gm = (int8_t)gm; }
+        app_core_unlock();
+        ui_notify_light_state(f->addr);
+        vTaskDelay(pdMS_TO_TICKS(15));
+    }
+
+    if (last) {
+        fade_stop();
+        ESP_LOGI(TAG, "fade complete");
+        s_poll_ticks = STATUS_POLL_TICKS - 3;
+        maybe_save_seq();
+    }
+}
+
 static void recall_scene(int idx)
 {
     scene_t *sc = scenes_get(idx);
     if (!sc) return;
-    ESP_LOGI(TAG, "recall scene %d '%s'", idx, sc->name);
+    ESP_LOGI(TAG, "recall scene %d '%s' fade=%ums", idx, sc->name, s_fade_ms);
+    fade_stop();
     s_master = 1000;
+    s_last_scene = idx;
+
+    if (s_fade_ms == 0) {
+        for (int i = 0; i < sc->count; i++) {
+            const scene_entry_t *e = &sc->e[i];
+            light_t *l = lights_find_by_addr(e->addr);
+            if (!l) continue;
+            send_look(l, e->on, (light_mode_t)e->mode, e->intensity, e->cct, e->gm, e->hue, e->sat);
+        }
+        ui_notify_lights_changed();
+        s_poll_ticks = STATUS_POLL_TICKS - 3;
+        return;
+    }
+
+    /* build the interpolation table from the lights' current (possibly
+     * mid-fade) state to the scene targets */
+    memset(&s_fade, 0, sizeof(s_fade));
     for (int i = 0; i < sc->count; i++) {
         const scene_entry_t *e = &sc->e[i];
         light_t *l = lights_find_by_addr(e->addr);
         if (!l) continue;
-        send_look(l, e->on, (light_mode_t)e->mode, e->intensity, e->cct, e->gm, e->hue, e->sat);
+        fade_light_t *f = &s_fade.l[s_fade.count++];
+        f->addr = e->addr;
+        f->on0 = l->state.on;      f->on1 = e->on;
+        f->mode1 = e->mode;
+        f->lvl0 = l->state.on ? l->state.level : 0;
+        f->lvl1 = e->on ? e->intensity : 0;
+        f->cct0 = l->state.cct;    f->cct1 = e->cct ? e->cct : l->state.cct;
+        f->gm0 = l->state.gm;      f->gm1 = e->gm;
+        f->hue0 = l->state.hue;    f->hue1 = e->hue;
+        f->sat0 = l->state.sat;    f->sat1 = e->sat;
+        /* when the mode changes there is nothing sensible to fade the new
+         * mode's colour from, so start it at its target */
+        if ((light_mode_t)e->mode != l->state.mode) {
+            f->cct0 = f->cct1; f->gm0 = f->gm1; f->hue0 = f->hue1; f->sat0 = f->sat1;
+        }
     }
-    s_last_scene = idx;
+    if (s_fade.count == 0) return;
+
+    uint32_t step_ms = (uint32_t)s_fade.count * 1000 / FADE_MSGS_PER_SEC;
+    if (step_ms < FADE_MIN_STEP_MS) step_ms = FADE_MIN_STEP_MS;
+    int steps = (int)(s_fade_ms / step_ms);
+    if (steps < 1) steps = 1;
+    s_fade.step_ms = step_ms;
+    s_fade.steps = steps;
+    s_fade.scene = idx;
+    s_fade.active = true;
+    ESP_LOGI(TAG, "fade: %d lights, %d steps of %lums", s_fade.count, steps, (unsigned long)step_ms);
+    esp_timer_start_periodic(s_fade_timer, step_ms * 1000);
+    fade_step();
     ui_notify_lights_changed();
-    s_poll_ticks = STATUS_POLL_TICKS - 3;
 }
 
 static void schedule_refresh(uint16_t addr)
@@ -1013,6 +1178,7 @@ static void on_cmd(const app_event_t *ev)
 
     case CMD_POWER:
         s_last_scene = -1;
+        fade_stop();
         telink_onoff(ev->cmd.on, p);
         send_telink(ev->cmd.addr, p);
         st.command_type = TELINK_CMD_ONOFF; st.on = ev->cmd.on;
@@ -1021,6 +1187,7 @@ static void on_cmd(const app_event_t *ev)
         break;
 
     case CMD_INTENSITY:
+        fade_stop();
         telink_intensity(scaled(ev->cmd.a), p);
         send_telink(ev->cmd.addr, p);
         st.command_type = TELINK_CMD_INTENSITY; st.intensity = scaled(ev->cmd.a);
@@ -1029,6 +1196,7 @@ static void on_cmd(const app_event_t *ev)
         break;
 
     case CMD_CCT:
+        fade_stop();
         telink_cct(ev->cmd.a, scaled(ev->cmd.b), ev->cmd.c, p);
         send_telink(ev->cmd.addr, p);
         st.command_type = TELINK_CMD_CCT; st.is_hsi = false; st.cct_kelvin = ev->cmd.a;
@@ -1038,6 +1206,7 @@ static void on_cmd(const app_event_t *ev)
         break;
 
     case CMD_HSI:
+        fade_stop();
         telink_hsi(ev->cmd.a, (uint8_t)ev->cmd.c, scaled(ev->cmd.b), p);
         send_telink(ev->cmd.addr, p);
         st.command_type = TELINK_CMD_HSI; st.is_hsi = true; st.hue = ev->cmd.a;
@@ -1089,6 +1258,7 @@ static void on_cmd(const app_event_t *ev)
     }
 
     case CMD_MASTER:
+        fade_stop();
         s_master = ev->cmd.a > 1000 ? 1000 : ev->cmd.a;
         apply_master();
         break;
@@ -1147,6 +1317,25 @@ static void on_cmd(const app_event_t *ev)
     case CMD_SCENE_RECALL:
         recall_scene(ev->cmd.c);
         break;
+
+    case CMD_SET_FADE:
+        s_fade_ms = ev->cmd.a;
+        store_save_u16("fade_ms", s_fade_ms);
+        ESP_LOGI(TAG, "fade time %u ms", s_fade_ms);
+        ui_notify_lights_changed();
+        break;
+
+    case CMD_DIAG_LIGHTNESS: {
+        /* Light Lightness Set (0x824C): lightness u16 LE, TID, transition, delay */
+        static uint8_t tid;
+        uint8_t msg[7] = { 0x82, 0x4C, (uint8_t)ev->cmd.a, (uint8_t)(ev->cmd.a >> 8), tid++,
+                           (uint8_t)ev->cmd.b, 0x00 };
+        int rc = mesh_net_send_access(&s_net, ev->cmd.addr, 0xff, NULL, msg, sizeof(msg));
+        ESP_LOGW(TAG, "DIAG Light Lightness Set -> 0x%04x lightness=%u transition=0x%02x rc=%d "
+                 "(watch whether the fixture dims smoothly)", ev->cmd.addr, ev->cmd.a, (unsigned)ev->cmd.b, rc);
+        maybe_save_seq();
+        break;
+    }
 
     case CMD_SCENE_DELETE:
         app_core_lock();
@@ -1218,6 +1407,7 @@ static void on_tick(void)
         }
         break;
     case CS_ONLINE:
+        if (s_fade.active) break;              /* no polling mid-fade */
         if (s_refresh_in > 0 && --s_refresh_in == 0) {
             send_status_request(s_refresh_addr);
         }
@@ -1256,6 +1446,7 @@ static void core_task(void *arg)
         case EV_BLE:  on_ble(ev.ble.evt, &ev.ble.d); break;
         case EV_CMD:  on_cmd(&ev); break;
         case EV_TICK: on_tick(); break;
+        case EV_FADE: fade_step(); break;
         }
     }
 }
@@ -1300,6 +1491,9 @@ void app_core_start(void)
     const esp_timer_create_args_t targs = { .callback = tick_cb, .name = "core_tick" };
     esp_timer_create(&targs, &s_tick_timer);
     esp_timer_start_periodic(s_tick_timer, TICK_MS * 1000);
+    const esp_timer_create_args_t fargs = { .callback = fade_timer_cb, .name = "core_fade" };
+    esp_timer_create(&fargs, &s_fade_timer);
+    if (store_load_u16("fade_ms", &s_fade_ms) != 0) s_fade_ms = FADE_DEFAULT_MS;
 
     xTaskCreatePinnedToCore(core_task, "app_core", 8192, NULL, 6, NULL, 1);
 
