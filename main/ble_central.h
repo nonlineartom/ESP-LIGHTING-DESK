@@ -28,6 +28,7 @@ typedef enum {
     BLE_EVT_READY,           /* characteristics found and notifications enabled */
     BLE_EVT_DISCONNECTED,
     BLE_EVT_PROXY_PDU,       /* ble_proxy_pdu_t: complete (reassembled) proxy PDU */
+    BLE_EVT_RESET,           /* host lost the controller; wait for BLE_EVT_SYNCED */
 } ble_evt_t;
 
 typedef struct {
@@ -58,6 +59,7 @@ typedef void (*ble_evt_cb_t)(ble_evt_t evt, const void *data, size_t len);
 int  ble_central_init(ble_evt_cb_t cb);
 int  ble_central_scan_start(void);
 int  ble_central_scan_stop(void);
+bool ble_central_is_synced(void);
 int  ble_central_connect(const uint8_t addr[6], uint8_t addr_type, bool provisioning_service);
 int  ble_central_disconnect(void);
 bool ble_central_is_connected(void);

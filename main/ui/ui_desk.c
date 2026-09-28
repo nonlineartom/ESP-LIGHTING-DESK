@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "app_core.h"
+#include "md_attr.h"
 #include "ui.h"
 
 #define PAGES_MAX      (LIGHTS_MAX + 1)
@@ -50,7 +51,7 @@ static lv_obj_t *s_carousel;
 static lv_obj_t *s_link;
 static lv_obj_t *s_dots[PAGES_MAX];
 static lv_obj_t *s_hint_up;
-static page_t    s_pages[PAGES_MAX];
+MD_EXT_BSS static page_t s_pages[PAGES_MAX];
 static int       s_page_count;
 static int       s_current;
 static uint32_t  s_last_send;

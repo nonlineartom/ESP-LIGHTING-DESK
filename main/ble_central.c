@@ -119,6 +119,8 @@ static void handle_disc(const struct ble_gap_disc_desc *disc)
     }
 }
 
+bool ble_central_is_synced(void) { return s_synced; }
+
 int ble_central_scan_start(void)
 {
     if (!s_synced) return -1;
@@ -458,6 +460,10 @@ static void on_reset(int reason)
     ESP_LOGW(TAG, "host reset reason=%d", reason);
     s_synced = false;
     s_scanning = false;
+    s_conn = BLE_HS_CONN_HANDLE_NONE;
+    s_ready = false;
+    s_rx_active = false;
+    emit(BLE_EVT_RESET, NULL, 0);
 }
 
 static void on_sync(void)

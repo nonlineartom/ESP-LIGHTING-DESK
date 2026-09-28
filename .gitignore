@@ -10,3 +10,4 @@ tools/sim/obj/
 tools/sim/liblvgl.a
 tools/sim/render
 tools/sim/out/
+tools/sim/gesture_test

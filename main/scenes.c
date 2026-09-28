@@ -1,9 +1,10 @@
 #include "scenes.h"
+#include "md_attr.h"
 
 #include <stdio.h>
 #include <string.h>
 
-scene_t g_scenes[SCENES_MAX];
+MD_EXT_BSS scene_t g_scenes[SCENES_MAX];
 
 int scenes_count(void)
 {

@@ -1,4 +1,5 @@
 #include "lights.h"
+#include "md_attr.h"
 
 #include "products.h"
 
@@ -7,7 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
-light_t g_lights[LIGHTS_MAX];
+MD_EXT_BSS light_t g_lights[LIGHTS_MAX];
 
 int lights_count(void)
 {

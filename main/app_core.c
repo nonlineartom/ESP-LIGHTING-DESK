@@ -1,4 +1,5 @@
 #include "app_core.h"
+#include "md_attr.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -26,8 +27,11 @@ static const char *TAG = "core";
 #define OWN_ADDR            0x0001
 #define FIRST_LIGHT_ADDR    0x0002
 #define TICK_MS             400
-#define SEQ_SAVE_INTERVAL   32
-#define SEQ_BOOT_MARGIN     64
+/* Sequence numbers are reserved ahead: NVS holds a value the next boot may
+ * start from, always at least SEQ_RESERVE_LOW above anything already sent. */
+#define SEQ_RESERVE         512
+#define SEQ_RESERVE_LOW     128
+#define SEQ_BOOT_MARGIN     64      /* covers records written by older firmware */
 #define STATUS_POLL_TICKS   20      /* 8 s */
 #define PROXY_SCAN_TIMEOUT  75      /* 30 s before we restart the scan */
 #define CFG_TIMEOUT_TICKS   8       /* ~3 s per config request */
@@ -103,8 +107,8 @@ static esp_timer_handle_t s_tick_timer;
 
 static core_state_t       s_state = CS_BOOT;
 static mesh_network_cfg_t s_netcfg;
-static mesh_net_t         s_net;
-static mesh_prov_t        s_prov;
+MD_EXT_BSS static mesh_net_t s_net;
+MD_EXT_BSS static mesh_prov_t s_prov;
 static uint32_t           s_seq_saved;
 static uint16_t           s_master = 1000;   /* grand master 0..1000 */
 static int                s_last_scene = -1;
@@ -143,7 +147,7 @@ static uint16_t s_refresh_addr;
 static pair_state_t s_pair_state = PAIR_IDLE;
 static char         s_pair_text[48] = "";
 static int          s_pair_pct;
-static unprov_dev_t s_unprov[UNPROV_MAX];
+MD_EXT_BSS static unprov_dev_t s_unprov[UNPROV_MAX];
 static int          s_unprov_n;
 static bool         s_pair_dirty;
 static struct {
@@ -251,6 +255,14 @@ static void ble_cb(ble_evt_t evt, const void *data, size_t len)
     app_event_t ev = { .kind = EV_BLE };
     ev.ble.evt = evt;
     if (data && len <= sizeof(ev.ble.d)) memcpy(&ev.ble.d, data, len);
+    if (evt == BLE_EVT_ADV_UNPROV || evt == BLE_EVT_ADV_PROXY) {
+        /* Scanning is unfiltered: adverts repeat, so dropping one is harmless,
+         * but blocking the NimBLE host task on a busy queue is not.  Keep a few
+         * slots free for connection events. */
+        if (uxQueueSpacesAvailable(s_queue) <= 6) return;
+        xQueueSend(s_queue, &ev, 0);
+        return;
+    }
     post(&ev);
 }
 
@@ -313,12 +325,15 @@ void app_cmd_rename_light(uint16_t addr, const char *name)
 /* mesh network callbacks                                                     */
 /* ------------------------------------------------------------------------- */
 
+static void maybe_save_seq(void);
+
 static void net_tx(void *ctx, const uint8_t *pdu, size_t len)
 {
     (void)ctx;
     if (ble_central_send_proxy_pdu(MESH_PROXY_TYPE_NETWORK, pdu, len) != 0) {
         ESP_LOGW(TAG, "proxy tx failed (not ready)");
     }
+    maybe_save_seq();
 }
 
 static const uint8_t *net_devkey_lookup(void *ctx, uint16_t src)
@@ -377,11 +392,25 @@ static void net_seg_done(void *ctx, bool ok)
 /* helpers                                                                    */
 /* ------------------------------------------------------------------------- */
 
+/* Called after anything that may have consumed sequence numbers (every
+ * network PDU goes through net_tx or proxy_filter_setup).  s_seq_saved is the
+ * reservation stored in NVS; a reboot resumes from it. */
 static void maybe_save_seq(void)
 {
-    if (s_net.seq - s_seq_saved >= SEQ_SAVE_INTERVAL || s_net.seq < s_seq_saved) {
-        s_seq_saved = s_net.seq;
-        store_save_seq(s_net.seq);
+    if (s_net.iv_index != s_netcfg.iv_index) {
+        /* IV Update from a beacon: persist it, or a reboot would go back to the
+         * old IV with fresh sequence numbers and reuse nonces. */
+        s_netcfg.iv_index = s_net.iv_index;
+        s_netcfg.seq = s_net.seq + SEQ_RESERVE;
+        s_seq_saved = s_netcfg.seq;
+        store_save_network(&s_netcfg);
+        ESP_LOGI(TAG, "IV index %lu saved", (unsigned long)s_net.iv_index);
+        return;
+    }
+    if (s_net.seq + SEQ_RESERVE_LOW >= s_seq_saved) {
+        s_seq_saved = s_net.seq + SEQ_RESERVE;
+        s_netcfg.seq = s_seq_saved;
+        store_save_seq(s_seq_saved);
     }
 }
 
@@ -413,6 +442,7 @@ static void proxy_filter_setup(void)
     params[2] = 0xff; params[3] = 0xff;
     len = mesh_net_build_proxy_cfg(&s_net, MESH_PROXY_CFG_ADD_ADDRESSES, params, 4, pdu, sizeof(pdu));
     if (len > 0) ble_central_send_proxy_pdu(MESH_PROXY_TYPE_PROXY_CFG, pdu, (size_t)len);
+    maybe_save_seq();
 }
 
 static void start_proxy_scan(uint16_t target, bool pairing)
@@ -444,6 +474,7 @@ static void save_lights(void)
 /* ------------------------------------------------------------------------- */
 
 static void cfg_send_current(void);
+static void fade_stop(void);
 
 static void cfg_begin(uint16_t addr)
 {
@@ -670,7 +701,9 @@ static void pair_abort(const char *reason)
 static void handle_unprov_adv(const ble_adv_t *adv)
 {
     if (s_state != CS_PAIR_SCAN) return;
-    if (lights_find_by_uuid(adv->unprov.uuid)) return;    /* already ours */
+    /* A light already in the registry that sends unprovisioned beacons has been
+     * factory-reset (or a pairing failed half way): list it so it can be
+     * paired again; lights_add() reuses its registry slot. */
     app_core_lock();
     int idx = -1;
     for (int i = 0; i < s_unprov_n; i++) {
@@ -801,6 +834,16 @@ static void on_ble(ble_evt_t evt, const void *d)
     switch (evt) {
     case BLE_EVT_SYNCED:
         if (s_state == CS_BOOT) go_idle_or_scan();
+        break;
+
+    case BLE_EVT_RESET:
+        /* The host lost the controller (C6 / SDIO hiccup).  Connections are
+         * gone; wait for the next sync and start over from scanning. */
+        ESP_LOGW(TAG, "bluetooth reset in state %d", s_state);
+        fade_stop();
+        if (s_state >= CS_PAIR_DISCONNECTING) set_pair(PAIR_FAILED, "Bluetooth restarted - try again", 0);
+        s_proxy_addr = 0;
+        set_state(CS_BOOT);
         break;
 
     case BLE_EVT_ADV_UNPROV:
@@ -1380,6 +1423,7 @@ static void on_tick(void)
                 set_pair(PAIR_FAILED, "Light did not come back - power-cycle it", 0);
                 go_idle_or_scan();
             } else {
+                ESP_LOGI(TAG, "no paired light in range yet; still scanning");
                 ble_central_scan_stop();
                 start_proxy_scan(0, false);
             }
@@ -1483,7 +1527,7 @@ static void init_network(void)
         .seg_done = net_seg_done,
     };
     mesh_net_init(&s_net, s_netcfg.netkey, s_netcfg.appkey, s_netcfg.iv_index, seq, OWN_ADDR, &cb);
-    s_seq_saved = 0;
+    s_seq_saved = 0;                /* forces a fresh reservation now */
     maybe_save_seq();
     ESP_LOGI(TAG, "network ready: nid=0x%02x aid=0x%02x iv=%lu seq=%lu lights=%d next_addr=0x%04x",
              s_net.nid, s_net.aid, (unsigned long)s_net.iv_index, (unsigned long)s_net.seq,

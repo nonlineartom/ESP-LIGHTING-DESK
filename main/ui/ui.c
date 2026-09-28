@@ -53,8 +53,14 @@ static void on_touch_gesture(lv_event_t *e)
 
 uint32_t ui_now_ms(void) { return lv_tick_get(); }
 
+/* Set once ui_init() has built the screens.  If the display failed to come
+ * up the firmware runs headless and every ui_notify_* is a no-op (LVGL and
+ * its port mutex do not exist then). */
+static bool s_ui_ready;
+
 bool ui_lock(uint32_t timeout_ms)
 {
+    if (!s_ui_ready) return false;
 #ifdef MESHDECK_HOST_SIM
     (void)timeout_ms;
     return true;
@@ -271,6 +277,7 @@ void ui_init(void)
     }
     lv_screen_load(s_desk);
     s_current = SCR_DESK;
+    s_ui_ready = true;
     UI_LOGI("ui ready");
 }
 
