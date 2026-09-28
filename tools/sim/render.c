@@ -110,6 +110,11 @@ int main(void)
     ui_init();
     run(400);
     snap("01_empty");
+    ui_scenes_set_open(true, false);
+    run(300);
+    snap("16_scenes_empty");
+    ui_scenes_set_open(false, false);
+    run(100);
 
     /* 2. studio with three lights: master page */
     studio();

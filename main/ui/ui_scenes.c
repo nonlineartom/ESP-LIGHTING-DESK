@@ -8,11 +8,15 @@
 #include "app_core.h"
 #include "ui.h"
 
-#define DRAWER_H       600
-#define DRAWER_OPEN_Y  174   /* keeps the channel title readable above the sheet */
+/* The drawer covers the whole glass when open: a clean panel, no desk
+ * controls peeking out above it, and room for the list inside the circle. */
+#define DRAWER_H       UI_H
+#define DRAWER_OPEN_Y  0
 #define DRAWER_CLOSED_Y UI_H
-#define ROW_W          400
-#define ROW_H          78
+#define ROW_W          460
+#define ROW_H          84
+#define FADE_W         100
+#define FADE_GAP       10
 
 static lv_obj_t *s_drawer;
 static lv_obj_t *s_list;
@@ -131,16 +135,18 @@ static lv_obj_t *make_row(int idx)
 
     lv_obj_t *name = lv_label_create(row);
     lv_obj_set_style_text_font(name, ui_font_medium, 0);
-    lv_obj_align(name, LV_ALIGN_LEFT_MID, 26, -13);
+    lv_obj_set_width(name, ROW_W - 150);
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+    lv_obj_align(name, LV_ALIGN_LEFT_MID, 32, -15);
     s_row_name[idx] = name;
 
     for (int i = 0; i < LIGHTS_MAX; i++) {
         lv_obj_t *d = lv_obj_create(row);
-        lv_obj_set_size(d, 18, 18);
+        lv_obj_set_size(d, 16, 16);
         lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_border_width(d, 0, 0);
         lv_obj_remove_flag(d, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_align(d, LV_ALIGN_LEFT_MID, 26 + i * 24, 16);
+        lv_obj_align(d, LV_ALIGN_LEFT_MID, 34 + i * 24, 20);
         lv_obj_add_flag(d, LV_OBJ_FLAG_HIDDEN);
         s_row_discs[idx][i] = d;
     }
@@ -150,7 +156,7 @@ static lv_obj_t *make_row(int idx)
     lv_obj_set_style_text_color(del, ui_col_muted, 0);
     lv_obj_set_style_pad_all(del, 14, 0);
     lv_obj_add_flag(del, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_align(del, LV_ALIGN_RIGHT_MID, -14, 0);
+    lv_obj_align(del, LV_ALIGN_RIGHT_MID, -16, 0);
     lv_obj_add_event_cb(del, on_row_delete, LV_EVENT_CLICKED, (void *)(uintptr_t)idx);
     s_row_del[idx] = del;
 
@@ -159,7 +165,7 @@ static lv_obj_t *make_row(int idx)
     lv_obj_set_style_text_color(ren, ui_col_muted, 0);
     lv_obj_set_style_pad_all(ren, 14, 0);
     lv_obj_add_flag(ren, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_align(ren, LV_ALIGN_RIGHT_MID, -64, 0);
+    lv_obj_align(ren, LV_ALIGN_RIGHT_MID, -72, 0);
     lv_obj_add_event_cb(ren, on_row_rename, LV_EVENT_CLICKED, (void *)(uintptr_t)idx);
     return row;
 }
@@ -172,9 +178,7 @@ void ui_scenes_create(lv_obj_t *screen)
     lv_obj_set_style_bg_color(s_drawer, ui_col_bg, 0);
     lv_obj_set_style_bg_opa(s_drawer, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(s_drawer, 56, 0);
-    lv_obj_set_style_border_width(s_drawer, 2, 0);
-    lv_obj_set_style_border_color(s_drawer, ui_col_panel_hi, 0);
-    lv_obj_set_style_border_side(s_drawer, LV_BORDER_SIDE_TOP, 0);
+    lv_obj_set_style_border_width(s_drawer, 0, 0);
     lv_obj_set_style_shadow_width(s_drawer, 40, 0);
     lv_obj_set_style_shadow_color(s_drawer, lv_color_black(), 0);
     lv_obj_set_style_shadow_opa(s_drawer, LV_OPA_70, 0);
@@ -182,7 +186,7 @@ void ui_scenes_create(lv_obj_t *screen)
     lv_obj_remove_flag(s_drawer, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
 
     lv_obj_t *handle = ui_make_handle(s_drawer);
-    lv_obj_align(handle, LV_ALIGN_TOP_MID, 0, 14);
+    lv_obj_align(handle, LV_ALIGN_TOP_MID, 0, 26);
     lv_obj_add_flag(handle, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(handle, 30);
     lv_obj_add_event_cb(handle, on_handle, LV_EVENT_CLICKED, NULL);
@@ -190,27 +194,30 @@ void ui_scenes_create(lv_obj_t *screen)
     s_title = lv_label_create(s_drawer);
     lv_label_set_text(s_title, "Scenes");
     lv_obj_set_style_text_font(s_title, ui_font_large, 0);
-    lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, 34);
+    lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, 56);
 
-    /* fade time selector: Snap / 1 s / 2 s / 5 s */
+    /* crossfade selector: a captioned segmented row, Snap / 1 s / 2 s / 5 s */
     lv_obj_t *fl = lv_label_create(s_drawer);
-    lv_label_set_text(fl, "Fade");
+    lv_label_set_text(fl, "CROSSFADE");
     lv_obj_set_style_text_font(fl, ui_font_small, 0);
     lv_obj_set_style_text_color(fl, ui_col_muted, 0);
-    lv_obj_align(fl, LV_ALIGN_TOP_MID, -180, 118);
+    lv_obj_set_style_text_letter_space(fl, 2, 0);
+    lv_obj_align(fl, LV_ALIGN_TOP_MID, 0, 116);
+    const int fade_x0 = UI_CX - (4 * FADE_W + 3 * FADE_GAP) / 2;
     for (int i = 0; i < 4; i++) {
-        s_fade_btn[i] = ui_make_pill(s_drawer, k_fade_txt[i], 78, 36, ui_col_panel, ui_font_small);
-        lv_obj_align(s_fade_btn[i], LV_ALIGN_TOP_MID, -84 + i * 86, 108);
+        s_fade_btn[i] = ui_make_pill(s_drawer, k_fade_txt[i], FADE_W, 44, ui_col_panel, ui_font_small);
+        lv_obj_set_pos(s_fade_btn[i], fade_x0 + i * (FADE_W + FADE_GAP), 146);
         lv_obj_add_event_cb(s_fade_btn[i], on_fade, LV_EVENT_CLICKED, (void *)(uintptr_t)i);
     }
 
     s_list = lv_obj_create(s_drawer);
-    lv_obj_set_size(s_list, ROW_W + 24, 330);
-    lv_obj_align(s_list, LV_ALIGN_TOP_MID, 0, 154);
+    lv_obj_set_size(s_list, ROW_W + 24, 404);
+    lv_obj_align(s_list, LV_ALIGN_TOP_MID, 0, 212);
+    lv_obj_set_style_pad_bottom(s_list, 40, 0);   /* last row scrolls clear of the rim */
     lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
     lv_obj_set_style_pad_all(s_list, 6, 0);
-    lv_obj_set_style_pad_row(s_list, 12, 0);
+    lv_obj_set_style_pad_row(s_list, 14, 0);
     lv_obj_set_flex_flow(s_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(s_list, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scrollbar_mode(s_list, LV_SCROLLBAR_MODE_OFF);
@@ -221,15 +228,15 @@ void ui_scenes_create(lv_obj_t *screen)
         s_rows[i] = make_row(i);
         lv_obj_add_flag(s_rows[i], LV_OBJ_FLAG_HIDDEN);
     }
-    s_add = ui_make_pill(s_list, LV_SYMBOL_PLUS "  Save current look", ROW_W, 60, ui_col_panel_hi, ui_font_normal);
+    s_add = ui_make_pill(s_list, LV_SYMBOL_PLUS "  Save current look", ROW_W, 64, ui_col_panel_hi, ui_font_normal);
     lv_obj_add_event_cb(s_add, on_add, LV_EVENT_CLICKED, NULL);
 
-    s_empty = lv_label_create(s_drawer);
+    s_empty = lv_label_create(s_list);          /* sits above "+" inside the list */
     lv_label_set_text(s_empty, "No scenes yet.\nSet the lights, then save the look.");
     lv_obj_set_style_text_align(s_empty, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(s_empty, ui_col_muted, 0);
     lv_obj_set_style_text_font(s_empty, ui_font_small, 0);
-    lv_obj_align(s_empty, LV_ALIGN_TOP_MID, 0, 198);
+    lv_obj_set_style_pad_ver(s_empty, 24, 0);
     lv_obj_add_flag(s_empty, LV_OBJ_FLAG_HIDDEN);
 
     ui_scenes_refresh();

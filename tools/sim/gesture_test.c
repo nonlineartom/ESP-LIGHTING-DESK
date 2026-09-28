@@ -8,6 +8,8 @@
 
 #include "lvgl.h"
 #include "ui.h"
+#include "app_core.h"
+#include <string.h>
 
 static uint32_t s_ms;
 static lv_indev_t *s_pointer;
@@ -43,6 +45,27 @@ static void feed(int contacts, int y)
     }
     lv_indev_read(s_pointer);
     lv_timer_handler();
+}
+
+/* one finger, arbitrary path */
+static void drag_xy(int x0, int y0, int x1, int y1)
+{
+    for (int i = 0; i <= 10; i++) {
+        s_ms += 25;
+        s_contacts = 1;
+        s_points[0].id = 1;
+        s_points[0].point.x = x0 + (x1 - x0) * i / 10;
+        s_points[0].point.y = y0 + (y1 - y0) * i / 10;
+        s_points[0].state = LV_INDEV_STATE_PRESSED;
+        s_points[0].timestamp = s_ms;
+        s_points[1].state = LV_INDEV_STATE_RELEASED;
+        lv_indev_read(s_pointer);
+        lv_timer_handler();
+    }
+    s_contacts = 0;
+    s_points[0].state = LV_INDEV_STATE_RELEASED;
+    lv_indev_read(s_pointer);
+    for (int i = 0; i < 40; i++) { s_ms += 10; lv_timer_handler(); }
 }
 
 static void swipe(int contacts, int from, int to)
@@ -90,5 +113,29 @@ int main(void)
     failures += check("two finger up opens scenes", false, true);
     swipe(2, 240, 500);
     failures += check("two finger down closes scenes", false, false);
+
+    /* Dragging along the HSI colour wheel sets the hue and must not swipe
+     * the desk to another page. */
+    uint8_t uuid[16] = { 0 }, key[16] = { 0 };
+    memcpy(uuid, "40095-1A2B3C", 12);                 /* amaran T4c: has HSI */
+    light_t *l = lights_add(uuid, 2, 1, key, "Back");
+    l->configured = true;
+    l->state.on = true;
+    l->state.reported = true;
+    l->state.mode = LIGHT_MODE_HSI;
+    l->state.hue = 0;
+    l->state.sat = 80;
+    l->state.level = l->state.intensity = 500;
+    ui_notify_lights_changed();
+    ui_desk_goto(1, false);
+    for (int i = 0; i < 20; i++) { s_ms += 10; lv_timer_handler(); }
+    /* wheel centre (360, 330), ring radius ~154: sweep across the top of it */
+    drag_xy(250, 222, 470, 222);
+    bool same_page = ui_desk_current_addr() == 2;
+    bool hue_moved = l->state.hue != 0;
+    printf("%s wheel drag stays on the page (addr 0x%04x)\n", same_page ? "PASS" : "FAIL", ui_desk_current_addr());
+    printf("%s wheel drag sets the hue (%u)\n", hue_moved ? "PASS" : "FAIL", l->state.hue);
+    if (!same_page) failures++;
+    if (!hue_moved) failures++;
     return failures ? 1 : 0;
 }

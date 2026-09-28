@@ -11,6 +11,7 @@
 #include "app_core.h"
 #include "md_attr.h"
 #include "ui.h"
+#include "src/core/lv_obj_event_private.h"   /* lv_hit_test_info_t */
 
 #define PAGES_MAX      (LIGHTS_MAX + 1)
 #define DISC_SIZE      240
@@ -110,6 +111,18 @@ static void slider_set(lv_obj_t *slider, int value)
     if (!lv_obj_has_state(slider, LV_STATE_PRESSED)) lv_slider_set_value(slider, value, LV_ANIM_OFF);
 }
 
+/* The saturation fader is a white-to-hue gradient; its knob is the colour
+ * the light is set to (hue at the current saturation). */
+static void sat_paint(page_t *pg)
+{
+    int sat = (int)lv_slider_get_value(pg->arc_sat);
+    lv_color_t full = lv_color_hsv_to_rgb(pg->hue_value, 100, 100);
+    lv_obj_set_style_bg_color(pg->arc_sat, full, LV_PART_MAIN);
+    lv_obj_set_style_bg_grad_color(pg->arc_sat, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(pg->arc_sat, lv_color_hsv_to_rgb(pg->hue_value, (uint8_t)sat, 100), LV_PART_KNOB);
+    lv_obj_set_style_bg_color(pg->wheel_knob, full, 0);
+}
+
 static void wheel_place_marker(page_t *pg)
 {
     double a = pg->hue_value * M_PI / 180.0;
@@ -162,6 +175,16 @@ static void on_ring(lv_event_t *e)
     if (s_refreshing || throttled(e)) return;
     if (pg->addr == 0) app_cmd_master_level((uint16_t)v * 10);
     else               app_cmd_set_intensity(pg->addr, (uint16_t)v * 10);
+}
+
+static void disc_hit_test(lv_event_t *e)
+{
+    lv_hit_test_info_t *info = (lv_hit_test_info_t *)lv_event_get_param(e);
+    lv_area_t a;
+    lv_obj_get_coords(lv_event_get_target(e), &a);
+    int r = lv_area_get_width(&a) / 2;
+    int dx = info->point->x - (a.x1 + r), dy = info->point->y - (a.y1 + r);
+    info->res = dx * dx + dy * dy <= r * r;
 }
 
 static void on_disc(lv_event_t *e)
@@ -228,6 +251,7 @@ static void on_wheel(lv_event_t *e)
     if (degrees < 0) degrees += 360.0;
     pg->hue_value = (uint16_t)lround(degrees) % 360;
     wheel_place_marker(pg);
+    sat_paint(pg);
     lv_label_set_text_fmt(pg->sub, "%u\xC2\xB0  %d%%", pg->hue_value,
                           (int)lv_slider_get_value(pg->arc_sat));
     if (s_refreshing || throttled(e)) return;
@@ -238,6 +262,7 @@ static void on_sat(lv_event_t *e)
 {
     page_t *pg = (page_t *)lv_event_get_user_data(e);
     lv_label_set_text_fmt(pg->sat_value, "%d%%", (int)lv_slider_get_value(pg->arc_sat));
+    sat_paint(pg);
     if (s_refreshing || throttled(e)) return;
     send_hsi(pg);
 }
@@ -451,6 +476,10 @@ static lv_obj_t *make_disc(lv_obj_t *page, page_t *pg)
     lv_obj_set_style_pad_all(disc, 0, 0);
     lv_obj_remove_flag(disc, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(disc, LV_OBJ_FLAG_CLICKABLE);
+    /* hit-test the circle, not its bounding square: the square's corners
+     * cover the diagonals of the HSI hue ring around it */
+    lv_obj_add_flag(disc, LV_OBJ_FLAG_ADV_HITTEST);
+    lv_obj_add_event_cb(disc, disc_hit_test, LV_EVENT_HIT_TEST, NULL);
     lv_obj_add_event_cb(disc, on_disc, LV_EVENT_PRESSED, pg);
     lv_obj_add_event_cb(disc, on_disc, LV_EVENT_PRESSING, pg);
     lv_obj_add_event_cb(disc, on_disc, LV_EVENT_CLICKED, pg);
@@ -492,6 +521,8 @@ static void make_hsi_tools(page_t *pg)
     lv_obj_set_style_border_width(pg->wheel, 0, 0);
     lv_obj_set_style_pad_all(pg->wheel, 0, 0);
     lv_obj_remove_flag(pg->wheel, LV_OBJ_FLAG_SCROLLABLE);
+    /* a drag on the wheel sets the hue; it must not reach the page carousel */
+    lv_obj_remove_flag(pg->wheel, LV_OBJ_FLAG_SCROLL_CHAIN);
     lv_obj_add_flag(pg->wheel, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(pg->wheel, wheel_draw, LV_EVENT_DRAW_MAIN, NULL);
     lv_obj_add_event_cb(pg->wheel, on_wheel, LV_EVENT_PRESSED, pg);
@@ -521,10 +552,12 @@ static void make_hsi_tools(page_t *pg)
     lv_slider_set_range(pg->arc_sat, 0, 100);
     lv_obj_set_style_radius(pg->arc_sat, LV_RADIUS_CIRCLE, LV_PART_MAIN);
     lv_obj_set_style_radius(pg->arc_sat, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(pg->arc_sat, ui_col_track, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(pg->arc_sat, lv_color_hex(0xe58abb), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(pg->arc_sat, ui_col_text, LV_PART_KNOB);
-    lv_obj_set_style_pad_all(pg->arc_sat, 8, LV_PART_KNOB);
+    lv_obj_set_style_bg_grad_dir(pg->arc_sat, LV_GRAD_DIR_VER, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(pg->arc_sat, LV_OPA_COVER, LV_PART_MAIN);   /* theme tracks are translucent */
+    lv_obj_set_style_bg_opa(pg->arc_sat, LV_OPA_TRANSP, LV_PART_INDICATOR);
+    lv_obj_set_style_border_width(pg->arc_sat, 3, LV_PART_KNOB);
+    lv_obj_set_style_border_color(pg->arc_sat, ui_col_text, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(pg->arc_sat, 9, LV_PART_KNOB);
     lv_obj_set_ext_click_area(pg->arc_sat, 18);
     lv_obj_add_event_cb(pg->arc_sat, on_sat, LV_EVENT_VALUE_CHANGED, pg);
     lv_obj_add_event_cb(pg->arc_sat, on_sat, LV_EVENT_RELEASED, pg);
@@ -780,6 +813,7 @@ static void refresh_channel(page_t *pg, bool animate)
         slider_set(pg->arc_sat, st->sat);
         lv_label_set_text_fmt(pg->sat_value, "%u%%", st->sat);
     }
+    sat_paint(pg);
     if (pg->has_hsi != l.has_hsi) { pg->has_hsi = l.has_hsi; layout_chips(pg); }
     if (l.has_gm) lv_obj_remove_flag(pg->card_gm, LV_OBJ_FLAG_HIDDEN);
     else          lv_obj_add_flag(pg->card_gm, LV_OBJ_FLAG_HIDDEN);
