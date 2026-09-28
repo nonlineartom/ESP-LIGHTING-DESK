@@ -12,3 +12,5 @@ tools/sim/render
 tools/sim/out/
 tools/sim/gesture_test
 tools/sim/*.dSYM/
+build.log
+tools/sim/*.log
