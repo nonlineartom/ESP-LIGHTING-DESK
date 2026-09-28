@@ -181,15 +181,17 @@ validated them on T4c and Ace 25c fixtures.
   sets its intensity and the disc pulses while it runs).
 * Battery fixtures show their charge in the disc (polled every minute).
 * **Two finger swipe up** or tap **Scenes** to open the drawer: tap to recall,
-  long-press to overwrite with the current look, bin to delete, "+" to save
-  the current look.  Scenes store effects too.  The **Fade** row sets the
+  long-press to overwrite with the current look, pencil to rename, bin to
+  delete, "+" to save the current look.  Scenes store effects too.  The **Fade** row sets the
   crossfade (Snap / 1 s / 2 s / 5 s); fades are stepped from the controller
   within a configurable mesh message budget, effects switch at the start.
 * **Two finger swipe down** or tap link status for the system sheet: pair a
   light; for the current light its model, ID, range and battery, **Rename**
   (keyboard + studio-name chips; long-pressing the light's name on its page
-  does the same), **Identify** (blinks it three times), **Remove**; factory
-  reset.
+  does the same), **Identify** (blinks it three times), **Remove**; display
+  brightness; factory reset.
+* The screen dims after two minutes without a touch; the touch that wakes it
+  does nothing else.
 
 ## Roadmap
 

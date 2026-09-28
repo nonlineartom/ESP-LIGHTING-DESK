@@ -83,7 +83,14 @@ battery display - its meaning is not confirmed.
 * **Rename** (or long-press the name on the light's page): keyboard entry,
   studio chips, Save; survives a reboot.
 
+### Display
+* **Display** slider in the system sheet changes the backlight live and is
+  kept after a reboot.
+* Leave the desk untouched for 2 minutes: the backlight dims; the next touch
+  only wakes it (tapping a light's disc while dimmed must not toggle it).
+
 ### Scenes and fades
+* Pencil on a scene row: rename with the keyboard; survives a reboot.
 * Save a scene with an effect running and one with a CCT look; recall each
   with Fade 2 s: effects switch at the start, CCT/HSI ramp in ~8 steps.  If
   steps are lost (the light stops short of the target), lower
