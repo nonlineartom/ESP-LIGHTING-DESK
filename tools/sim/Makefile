@@ -20,6 +20,10 @@ liblvgl.a: $(LV_OBJS)
 render: liblvgl.a $(UI_SRCS) $(SIM_SRCS)
 	$(CC) $(CFLAGS) -Wall -o $@ $(SIM_SRCS) $(UI_SRCS) liblvgl.a -lm
 
+gesture-test: liblvgl.a $(UI_SRCS) gesture_test.c stubs.c
+	$(CC) $(CFLAGS) -Wall -o gesture_test gesture_test.c stubs.c $(UI_SRCS) liblvgl.a -lm
+	./gesture_test
+
 clean:
-	rm -rf obj liblvgl.a render out
-.PHONY: all clean
+	rm -rf obj liblvgl.a render gesture_test out
+.PHONY: all clean gesture-test

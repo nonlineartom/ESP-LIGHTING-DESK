@@ -23,6 +23,30 @@ static lv_obj_t *s_desk;
 static lv_obj_t *s_pair_scr;
 static enum { SCR_DESK, SCR_PAIR } s_current;
 
+/* LVGL reports recognized multi-touch motion on the input device on every
+ * sample.  Object gesture events can stop after the first recognition sample,
+ * before the direction/distance has been populated. */
+static void on_touch_gesture(lv_event_t *e)
+{
+    if (s_current != SCR_DESK ||
+        lv_event_get_gesture_type(e) != LV_INDEV_GESTURE_TWO_FINGERS_SWIPE ||
+        lv_event_get_gesture_state(e, LV_INDEV_GESTURE_TWO_FINGERS_SWIPE) != LV_INDEV_GESTURE_STATE_RECOGNIZED ||
+        lv_event_get_two_fingers_swipe_distance(e) < 80) return;
+
+    lv_dir_t dir = lv_event_get_two_fingers_swipe_dir(e);
+    if (ui_scenes_is_open()) {
+        if (dir == LV_DIR_BOTTOM) ui_scenes_set_open(false, true);
+    } else if (ui_system_is_open()) {
+        if (dir == LV_DIR_TOP) ui_system_set_open(false, true);
+    } else {
+        if (dir == LV_DIR_TOP) ui_scenes_set_open(true, true);
+        else if (dir == LV_DIR_BOTTOM) ui_system_set_open(true, true);
+    }
+    /* A two finger navigation gesture must not click the control under the
+     * primary contact when the fingers lift. */
+    lv_indev_wait_release(lv_indev_active());
+}
+
 /* ------------------------------------------------------------------------- */
 /* platform glue                                                              */
 /* ------------------------------------------------------------------------- */
@@ -114,24 +138,6 @@ lv_obj_t *ui_make_handle(lv_obj_t *parent)
     lv_obj_set_style_border_width(h, 0, 0);
     lv_obj_remove_flag(h, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     return h;
-}
-
-void ui_arc_ring_style(lv_obj_t *arc, int width, lv_color_t indicator)
-{
-    lv_obj_set_style_arc_width(arc, width, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(arc, width, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(arc, ui_col_track, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(arc, indicator, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_rounded(arc, true, LV_PART_MAIN);
-    lv_obj_set_style_arc_rounded(arc, true, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(arc, ui_col_text, LV_PART_KNOB);
-    lv_obj_set_style_bg_opa(arc, LV_OPA_COVER, LV_PART_KNOB);
-    lv_obj_set_style_pad_all(arc, width / 2 + 3, LV_PART_KNOB);
-    lv_obj_set_style_shadow_width(arc, 18, LV_PART_KNOB);
-    lv_obj_set_style_shadow_color(arc, indicator, LV_PART_KNOB);
-    lv_obj_set_style_shadow_opa(arc, LV_OPA_60, LV_PART_KNOB);
-    lv_obj_set_style_bg_opa(arc, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_ext_click_area(arc, 24);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -226,65 +232,16 @@ void ui_fade_shadow(lv_obj_t *obj, lv_color_t to, uint32_t ms)
 }
 
 /* ------------------------------------------------------------------------- */
-/* text along an arc                                                          */
-/* ------------------------------------------------------------------------- */
-
-void ui_arc_text_set(ui_arc_text_t *t, lv_obj_t *parent, const char *text, int cx, int cy,
-                     int radius, int center_angle_deg, const lv_font_t *font, lv_color_t color)
-{
-    for (int i = 0; i < t->n; i++) {
-        if (t->chars[i]) lv_obj_delete(t->chars[i]);
-        t->chars[i] = NULL;
-    }
-    t->n = 0;
-    if (!text) return;
-
-    int n = (int)strlen(text);
-    if (n > UI_ARC_TEXT_MAX) n = UI_ARC_TEXT_MAX;
-    int widths[UI_ARC_TEXT_MAX], total = 0;
-    const int spacing = 3;
-    for (int i = 0; i < n; i++) {
-        widths[i] = lv_text_get_width(text + i, 1, font, 0);
-        if (widths[i] < 4) widths[i] = 6;    /* spaces */
-        total += widths[i] + spacing;
-    }
-    total -= spacing;
-    double deg_per_px = 180.0 / (M_PI * radius);
-    double start = center_angle_deg - (total * deg_per_px) / 2.0;
-    int lh = lv_font_get_line_height(font);
-    double acc = 0;
-    for (int i = 0; i < n; i++) {
-        double theta = start + (acc + widths[i] / 2.0) * deg_per_px;
-        double rad = theta * M_PI / 180.0;
-        int px = cx + (int)lround(radius * cos(rad));
-        int py = cy + (int)lround(radius * sin(rad));
-        lv_obj_t *c = lv_label_create(parent);
-        char s[2] = { text[i], 0 };
-        lv_label_set_text(c, s);
-        lv_obj_set_style_text_font(c, font, 0);
-        lv_obj_set_style_text_color(c, color, 0);
-        lv_obj_set_size(c, widths[i] + 2, lh);
-        lv_obj_set_pos(c, px - (widths[i] + 2) / 2, py - lh / 2);
-        lv_obj_set_style_transform_pivot_x(c, (widths[i] + 2) / 2, 0);
-        lv_obj_set_style_transform_pivot_y(c, lh / 2, 0);
-        lv_obj_set_style_transform_rotation(c, (int32_t)lround((theta + 90.0) * 10.0), 0);
-        lv_obj_remove_flag(c, LV_OBJ_FLAG_CLICKABLE);
-        t->chars[t->n++] = c;
-        acc += widths[i] + spacing;
-    }
-}
-
-/* ------------------------------------------------------------------------- */
 /* init + navigation                                                          */
 /* ------------------------------------------------------------------------- */
 
 void ui_init(void)
 {
-    ui_font_small  = &lv_font_montserrat_16;
-    ui_font_normal = &lv_font_montserrat_20;
-    ui_font_medium = &lv_font_montserrat_24;
-    ui_font_large  = &lv_font_montserrat_28;
-    ui_font_title  = &lv_font_montserrat_36;
+    ui_font_small  = &lv_font_montserrat_20;
+    ui_font_normal = &lv_font_montserrat_24;
+    ui_font_medium = &lv_font_montserrat_28;
+    ui_font_large  = &lv_font_montserrat_36;
+    ui_font_title  = &lv_font_montserrat_48;
     ui_font_huge   = &lv_font_montserrat_48;
     ui_col_bg          = lv_color_hex(0x0b0e14);
     ui_col_panel       = lv_color_hex(0x161b25);
@@ -308,6 +265,10 @@ void ui_init(void)
     ui_desk_create(s_desk);
     ui_scenes_create(s_desk);
     ui_system_create(s_desk);
+    for (lv_indev_t *indev = lv_indev_get_next(NULL); indev; indev = lv_indev_get_next(indev)) {
+        if (lv_indev_get_type(indev) == LV_INDEV_TYPE_POINTER)
+            lv_indev_add_event_cb(indev, on_touch_gesture, LV_EVENT_GESTURE, NULL);
+    }
     lv_screen_load(s_desk);
     s_current = SCR_DESK;
     UI_LOGI("ui ready");

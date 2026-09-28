@@ -9,9 +9,9 @@
 #include "ui.h"
 
 #define DRAWER_H       600
-#define DRAWER_OPEN_Y  (UI_H - DRAWER_H + 30)   /* 150: leaves the desk's top visible */
+#define DRAWER_OPEN_Y  174   /* keeps the channel title readable above the sheet */
 #define DRAWER_CLOSED_Y UI_H
-#define ROW_W          440
+#define ROW_W          400
 #define ROW_H          78
 
 static lv_obj_t *s_drawer;
@@ -91,12 +91,6 @@ static void on_add(lv_event_t *e)
     ui_breathe(s_add);
 }
 
-static void on_drawer_gesture(lv_event_t *e)
-{
-    lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_active());
-    if (dir == LV_DIR_BOTTOM) ui_scenes_set_open(false, true);
-}
-
 static void on_handle(lv_event_t *e) { (void)e; ui_scenes_set_open(false, true); }
 
 /* ------------------------------------------------------------------------- */
@@ -116,7 +110,7 @@ static lv_obj_t *make_row(int idx)
     lv_obj_add_event_cb(row, on_row_long, LV_EVENT_LONG_PRESSED, (void *)(uintptr_t)idx);
 
     lv_obj_t *name = lv_label_create(row);
-    lv_obj_set_style_text_font(name, ui_font_normal, 0);
+    lv_obj_set_style_text_font(name, ui_font_medium, 0);
     lv_obj_align(name, LV_ALIGN_LEFT_MID, 26, -13);
     s_row_name[idx] = name;
 
@@ -158,7 +152,6 @@ void ui_scenes_create(lv_obj_t *screen)
     lv_obj_set_style_shadow_opa(s_drawer, LV_OPA_70, 0);
     lv_obj_set_style_pad_all(s_drawer, 0, 0);
     lv_obj_remove_flag(s_drawer, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
-    lv_obj_add_event_cb(s_drawer, on_drawer_gesture, LV_EVENT_GESTURE, NULL);
 
     lv_obj_t *handle = ui_make_handle(s_drawer);
     lv_obj_align(handle, LV_ALIGN_TOP_MID, 0, 14);
@@ -168,7 +161,7 @@ void ui_scenes_create(lv_obj_t *screen)
 
     s_title = lv_label_create(s_drawer);
     lv_label_set_text(s_title, "Scenes");
-    lv_obj_set_style_text_font(s_title, ui_font_medium, 0);
+    lv_obj_set_style_text_font(s_title, ui_font_large, 0);
     lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, 34);
 
     /* fade time selector: Snap / 1 s / 2 s / 5 s */
@@ -176,16 +169,16 @@ void ui_scenes_create(lv_obj_t *screen)
     lv_label_set_text(fl, "Fade");
     lv_obj_set_style_text_font(fl, ui_font_small, 0);
     lv_obj_set_style_text_color(fl, ui_col_muted, 0);
-    lv_obj_align(fl, LV_ALIGN_TOP_MID, -180, 82);
+    lv_obj_align(fl, LV_ALIGN_TOP_MID, -180, 118);
     for (int i = 0; i < 4; i++) {
         s_fade_btn[i] = ui_make_pill(s_drawer, k_fade_txt[i], 78, 36, ui_col_panel, ui_font_small);
-        lv_obj_align(s_fade_btn[i], LV_ALIGN_TOP_MID, -84 + i * 86, 72);
+        lv_obj_align(s_fade_btn[i], LV_ALIGN_TOP_MID, -84 + i * 86, 108);
         lv_obj_add_event_cb(s_fade_btn[i], on_fade, LV_EVENT_CLICKED, (void *)(uintptr_t)i);
     }
 
     s_list = lv_obj_create(s_drawer);
-    lv_obj_set_size(s_list, ROW_W + 24, 366);
-    lv_obj_align(s_list, LV_ALIGN_TOP_MID, 0, 118);
+    lv_obj_set_size(s_list, ROW_W + 24, 330);
+    lv_obj_align(s_list, LV_ALIGN_TOP_MID, 0, 154);
     lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
     lv_obj_set_style_pad_all(s_list, 6, 0);
@@ -208,7 +201,7 @@ void ui_scenes_create(lv_obj_t *screen)
     lv_obj_set_style_text_align(s_empty, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(s_empty, ui_col_muted, 0);
     lv_obj_set_style_text_font(s_empty, ui_font_small, 0);
-    lv_obj_align(s_empty, LV_ALIGN_TOP_MID, 0, 160);
+    lv_obj_align(s_empty, LV_ALIGN_TOP_MID, 0, 198);
     lv_obj_add_flag(s_empty, LV_OBJ_FLAG_HIDDEN);
 
     ui_scenes_refresh();

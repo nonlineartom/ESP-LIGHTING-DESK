@@ -8,6 +8,7 @@
 
 #include "app_core.h"
 #include "scenes.h"
+#include "ui.h"
 
 static link_state_t s_link = LINK_ONLINE;
 static char         s_link_text[48] = "Online via Key";
