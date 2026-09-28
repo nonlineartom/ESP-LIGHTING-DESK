@@ -42,7 +42,9 @@ typedef enum { EV_BLE, EV_CMD, EV_TICK } ev_kind_t;
 typedef enum {
     CMD_PAIR_START, CMD_PAIR_SELECT, CMD_PAIR_CANCEL,
     CMD_POWER, CMD_INTENSITY, CMD_CCT, CMD_HSI, CMD_STATUS,
-    CMD_REMOVE, CMD_FACTORY_RESET,
+    CMD_REMOVE, CMD_FACTORY_RESET, CMD_RENAME,
+    CMD_MASTER, CMD_ALL_POWER, CMD_ALL_CCT,
+    CMD_SCENE_SAVE, CMD_SCENE_RECALL, CMD_SCENE_DELETE,
 } cmd_type_t;
 
 typedef struct {
@@ -62,6 +64,7 @@ typedef struct {
             int c;
             bool on;
             uint8_t uuid[16];
+            char    name[LIGHT_NAME_LEN];
         } cmd;
     };
 } app_event_t;
@@ -93,6 +96,8 @@ static mesh_network_cfg_t s_netcfg;
 static mesh_net_t         s_net;
 static mesh_prov_t        s_prov;
 static uint32_t           s_seq_saved;
+static uint16_t           s_master = 1000;   /* grand master 0..1000 */
+static int                s_last_scene = -1;
 
 static uint16_t s_proxy_addr;          /* light we are connected through */
 static uint16_t s_target_addr;         /* light we want to connect to (0 = any) */
@@ -247,6 +252,23 @@ void app_cmd_set_hsi(uint16_t addr, uint16_t h, uint8_t s, uint16_t v) { post_cm
 void app_cmd_request_status(uint16_t addr)           { post_cmd(CMD_STATUS, addr, 0, 0, 0, false, NULL); }
 void app_cmd_remove_light(uint16_t addr)             { post_cmd(CMD_REMOVE, addr, 0, 0, 0, false, NULL); }
 void app_cmd_factory_reset(void)                     { post_cmd(CMD_FACTORY_RESET, 0, 0, 0, 0, false, NULL); }
+void app_cmd_master_level(uint16_t level)            { post_cmd(CMD_MASTER, 0, level, 0, 0, false, NULL); }
+void app_cmd_all_power(bool on)                      { post_cmd(CMD_ALL_POWER, 0, 0, 0, 0, on, NULL); }
+void app_cmd_all_cct(uint16_t kelvin)                { post_cmd(CMD_ALL_CCT, 0, kelvin, 0, 0, false, NULL); }
+void app_cmd_scene_save(int idx)                     { post_cmd(CMD_SCENE_SAVE, 0, 0, 0, idx, false, NULL); }
+void app_cmd_scene_recall(int idx)                   { post_cmd(CMD_SCENE_RECALL, 0, 0, 0, idx, false, NULL); }
+void app_cmd_scene_delete(int idx)                   { post_cmd(CMD_SCENE_DELETE, 0, 0, 0, idx, false, NULL); }
+uint16_t app_core_master_level(void)                 { return s_master; }
+int      app_core_last_scene(void)                   { return s_last_scene; }
+
+void app_cmd_rename_light(uint16_t addr, const char *name)
+{
+    app_event_t ev = { .kind = EV_CMD };
+    ev.cmd.type = CMD_RENAME;
+    ev.cmd.addr = addr;
+    snprintf(ev.cmd.name, sizeof(ev.cmd.name), "%s", name ? name : "");
+    post(&ev);
+}
 
 /* ------------------------------------------------------------------------- */
 /* mesh network callbacks                                                     */
@@ -287,7 +309,11 @@ static void net_access_rx(void *ctx, uint16_t src, uint16_t dst, bool devkey,
         }
         app_core_lock();
         light_t *l = lights_find_by_addr(src);
-        if (l) lights_apply_status(l, &st, now_ms());
+        if (l) {
+            lights_apply_status(l, &st, now_ms());
+            uint32_t lv = s_master ? (uint32_t)st.intensity * 1000 / s_master : st.intensity;
+            l->state.level = lv > 1000 ? 1000 : (uint16_t)lv;
+        }
         app_core_unlock();
         ESP_LOGI(TAG, "status 0x%04x: %s %s int=%u cct=%u gm=%d hue=%u sat=%u", src,
                  st.on ? "on" : "off", st.is_hsi ? "hsi" : "cct", st.intensity, st.cct_kelvin,
@@ -844,6 +870,8 @@ static void optimistic_update(uint16_t addr, const telink_status_t *st, bool app
             l->state.on = st->on;
         } else {
             l->state.intensity = st->intensity;
+            l->state.level = s_master ? (uint16_t)((uint32_t)st->intensity * 1000 / s_master) : st->intensity;
+            if (l->state.level > 1000) l->state.level = 1000;
             if (apply_mode) {
                 l->state.mode = st->is_hsi ? LIGHT_MODE_HSI : LIGHT_MODE_CCT;
                 if (st->is_hsi) { l->state.hue = st->hue; l->state.sat = st->sat; }
@@ -853,6 +881,72 @@ static void optimistic_update(uint16_t addr, const telink_status_t *st, bool app
     }
     app_core_unlock();
     if (l) ui_notify_light_state(l->addr);
+}
+
+static uint16_t scaled(uint16_t level)
+{
+    uint32_t v = (uint32_t)level * s_master / 1000;
+    return v > 1000 ? 1000 : (uint16_t)v;
+}
+
+/* Send a light's whole look (mode + level + power).  Used by scenes and the
+ * desk-wide commands.  Spaced so the proxy and the mesh keep up. */
+static void send_look(light_t *l, bool on, light_mode_t mode, uint16_t level,
+                      uint16_t cct, int gm, uint16_t hue, uint8_t sat)
+{
+    uint8_t p[10];
+    uint16_t out = scaled(level);
+    if (mode == LIGHT_MODE_HSI) telink_hsi(hue, sat, out, p);
+    else                        telink_cct(cct, out, gm, p);
+    send_telink(l->addr, p);
+    vTaskDelay(pdMS_TO_TICKS(60));
+    telink_onoff(on, p);
+    send_telink(l->addr, p);
+    vTaskDelay(pdMS_TO_TICKS(60));
+
+    app_core_lock();
+    l->state.on = on;
+    l->state.mode = mode;
+    l->state.level = level;
+    l->state.intensity = out;
+    if (mode == LIGHT_MODE_HSI) { l->state.hue = hue; l->state.sat = sat; }
+    else                        { l->state.cct = cct; l->state.gm = (int8_t)gm; }
+    app_core_unlock();
+    ui_notify_light_state(l->addr);
+}
+
+static void apply_master(void)
+{
+    for (int i = 0; i < LIGHTS_MAX; i++) {
+        light_t *l = &g_lights[i];
+        if (!l->used) continue;
+        uint8_t p[10];
+        uint16_t out = scaled(l->state.level);
+        telink_intensity(out, p);
+        send_telink(l->addr, p);
+        app_core_lock();
+        l->state.intensity = out;
+        app_core_unlock();
+        ui_notify_light_state(l->addr);
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
+static void recall_scene(int idx)
+{
+    scene_t *sc = scenes_get(idx);
+    if (!sc) return;
+    ESP_LOGI(TAG, "recall scene %d '%s'", idx, sc->name);
+    s_master = 1000;
+    for (int i = 0; i < sc->count; i++) {
+        const scene_entry_t *e = &sc->e[i];
+        light_t *l = lights_find_by_addr(e->addr);
+        if (!l) continue;
+        send_look(l, e->on, (light_mode_t)e->mode, e->intensity, e->cct, e->gm, e->hue, e->sat);
+    }
+    s_last_scene = idx;
+    ui_notify_lights_changed();
+    s_poll_ticks = STATUS_POLL_TICKS - 3;
 }
 
 static void schedule_refresh(uint16_t addr)
@@ -918,6 +1012,7 @@ static void on_cmd(const app_event_t *ev)
         break;
 
     case CMD_POWER:
+        s_last_scene = -1;
         telink_onoff(ev->cmd.on, p);
         send_telink(ev->cmd.addr, p);
         st.command_type = TELINK_CMD_ONOFF; st.on = ev->cmd.on;
@@ -926,27 +1021,27 @@ static void on_cmd(const app_event_t *ev)
         break;
 
     case CMD_INTENSITY:
-        telink_intensity(ev->cmd.a, p);
+        telink_intensity(scaled(ev->cmd.a), p);
         send_telink(ev->cmd.addr, p);
-        st.command_type = TELINK_CMD_INTENSITY; st.intensity = ev->cmd.a;
+        st.command_type = TELINK_CMD_INTENSITY; st.intensity = scaled(ev->cmd.a);
         optimistic_update(ev->cmd.addr, &st, false);
         schedule_refresh(ev->cmd.addr);
         break;
 
     case CMD_CCT:
-        telink_cct(ev->cmd.a, ev->cmd.b, ev->cmd.c, p);
+        telink_cct(ev->cmd.a, scaled(ev->cmd.b), ev->cmd.c, p);
         send_telink(ev->cmd.addr, p);
         st.command_type = TELINK_CMD_CCT; st.is_hsi = false; st.cct_kelvin = ev->cmd.a;
-        st.intensity = ev->cmd.b; st.gm = (int8_t)ev->cmd.c;
+        st.intensity = scaled(ev->cmd.b); st.gm = (int8_t)ev->cmd.c;
         optimistic_update(ev->cmd.addr, &st, true);
         schedule_refresh(ev->cmd.addr);
         break;
 
     case CMD_HSI:
-        telink_hsi(ev->cmd.a, (uint8_t)ev->cmd.c, ev->cmd.b, p);
+        telink_hsi(ev->cmd.a, (uint8_t)ev->cmd.c, scaled(ev->cmd.b), p);
         send_telink(ev->cmd.addr, p);
         st.command_type = TELINK_CMD_HSI; st.is_hsi = true; st.hue = ev->cmd.a;
-        st.sat = (uint8_t)ev->cmd.c; st.intensity = ev->cmd.b;
+        st.sat = (uint8_t)ev->cmd.c; st.intensity = scaled(ev->cmd.b);
         optimistic_update(ev->cmd.addr, &st, true);
         schedule_refresh(ev->cmd.addr);
         break;
@@ -981,6 +1076,85 @@ static void on_cmd(const app_event_t *ev)
     case CMD_FACTORY_RESET:
         store_erase();
         esp_restart();
+        break;
+
+    case CMD_RENAME: {
+        light_t *l = lights_find_by_addr(ev->cmd.addr);
+        if (!l || !ev->cmd.name[0]) return;
+        app_core_lock();
+        snprintf(l->name, sizeof(l->name), "%s", ev->cmd.name);
+        app_core_unlock();
+        save_lights();
+        break;
+    }
+
+    case CMD_MASTER:
+        s_master = ev->cmd.a > 1000 ? 1000 : ev->cmd.a;
+        apply_master();
+        break;
+
+    case CMD_ALL_POWER:
+        for (int i = 0; i < LIGHTS_MAX; i++) {
+            light_t *l = &g_lights[i];
+            if (!l->used) continue;
+            telink_onoff(ev->cmd.on, p);
+            send_telink(l->addr, p);
+            app_core_lock();
+            l->state.on = ev->cmd.on;
+            app_core_unlock();
+            ui_notify_light_state(l->addr);
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        s_last_scene = -1;
+        s_poll_ticks = STATUS_POLL_TICKS - 3;
+        break;
+
+    case CMD_ALL_CCT:
+        for (int i = 0; i < LIGHTS_MAX; i++) {
+            light_t *l = &g_lights[i];
+            if (!l->used) continue;
+            uint16_t k = ev->cmd.a;
+            if (k < l->cct_min) k = l->cct_min;
+            if (k > l->cct_max) k = l->cct_max;
+            telink_cct(k, scaled(l->state.level), 0, p);
+            send_telink(l->addr, p);
+            app_core_lock();
+            l->state.mode = LIGHT_MODE_CCT;
+            l->state.cct = k;
+            l->state.gm = 0;
+            l->state.intensity = scaled(l->state.level);
+            app_core_unlock();
+            ui_notify_light_state(l->addr);
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        s_last_scene = -1;
+        s_poll_ticks = STATUS_POLL_TICKS - 3;
+        break;
+
+    case CMD_SCENE_SAVE: {
+        app_core_lock();
+        int idx = scenes_capture(ev->cmd.c, NULL);
+        app_core_unlock();
+        if (idx >= 0) {
+            store_save_scenes();
+            s_last_scene = idx;
+            ESP_LOGI(TAG, "scene %d saved", idx);
+        }
+        ui_notify_lights_changed();
+        break;
+    }
+
+    case CMD_SCENE_RECALL:
+        recall_scene(ev->cmd.c);
+        break;
+
+    case CMD_SCENE_DELETE:
+        app_core_lock();
+        scenes_delete(ev->cmd.c);
+        app_core_unlock();
+        store_save_scenes();
+        if (s_last_scene == ev->cmd.c) s_last_scene = -1;
+        ui_notify_lights_changed();
         break;
     }
 }
@@ -1100,6 +1274,7 @@ static void init_network(void)
         store_save_network(&s_netcfg);
     }
     store_load_lights();
+    store_load_scenes();
 
     uint32_t seq = s_netcfg.seq + SEQ_BOOT_MARGIN;
     mesh_net_callbacks_t cb = {

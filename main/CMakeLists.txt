@@ -9,12 +9,14 @@ idf_component_register(
         "mesh_cfg.c"
         "telink.c"
         "lights.c"
+        "scenes.c"
         "store.c"
         "app_core.c"
         "ui/ui.c"
-        "ui/ui_home.c"
+        "ui/ui_desk.c"
+        "ui/ui_scenes.c"
+        "ui/ui_system.c"
         "ui/ui_pair.c"
-        "ui/ui_control.c"
     INCLUDE_DIRS "." "ui"
     REQUIRES
         bt

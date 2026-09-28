@@ -1,52 +1,99 @@
 /*
- * LVGL user interface for the 720x720 round display.
+ * MeshDeck user interface — the round lighting desk (see docs/UI_DESIGN.md).
  *
- * ui_init() must be called with the LVGL lock held.  The ui_notify_* functions
- * are called from the application task and take the LVGL lock themselves.
+ * One LVGL screen ("desk") holds a horizontal snap carousel (master page +
+ * one page per light), a scenes drawer that rises from below and a system
+ * sheet that drops from above.  Pairing is a separate screen.
+ *
+ * ui_init() must run with the LVGL lock held.  The ui_notify_* functions are
+ * called from the application task and take the LVGL lock themselves.
  */
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
+
+#include "lvgl.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#define UI_W        720
+#define UI_H        720
+#define UI_CX       360
+#define UI_CY       360
+#define UI_R        360
+
 void ui_init(void);
 
+/* from the application task */
 void ui_notify_link_changed(void);
 void ui_notify_lights_changed(void);
 void ui_notify_light_state(uint16_t addr);
 void ui_notify_pair_changed(void);
 
-/* screens (call with LVGL lock held) */
-void ui_show_home(void);
+/* navigation (LVGL lock held) */
+void ui_show_desk(void);
 void ui_show_pair(void);
-void ui_show_control(uint16_t addr);
 
-/* shared helpers / theme (ui.c) */
-#include "lvgl.h"
-extern const lv_font_t *ui_font_small;
-extern const lv_font_t *ui_font_normal;
-extern const lv_font_t *ui_font_large;
-extern const lv_font_t *ui_font_title;
-extern lv_color_t ui_col_bg;
-extern lv_color_t ui_col_panel;
-extern lv_color_t ui_col_accent;
-extern lv_color_t ui_col_text;
-extern lv_color_t ui_col_muted;
-extern lv_color_t ui_col_ok;
-extern lv_color_t ui_col_warn;
+/* ---- theme ---------------------------------------------------------------- */
+extern const lv_font_t *ui_font_small;    /* 16 */
+extern const lv_font_t *ui_font_normal;   /* 20 */
+extern const lv_font_t *ui_font_medium;   /* 24 */
+extern const lv_font_t *ui_font_large;    /* 28 */
+extern const lv_font_t *ui_font_title;    /* 36 */
+extern const lv_font_t *ui_font_huge;     /* 48 */
+extern lv_color_t ui_col_bg, ui_col_panel, ui_col_panel_hi, ui_col_track, ui_col_accent,
+       ui_col_accent_dark, ui_col_text, ui_col_muted, ui_col_ok, ui_col_warn;
 
+/* ---- geometry / helpers ---------------------------------------------------- */
+uint32_t  ui_now_ms(void);
+bool      ui_lock(uint32_t timeout_ms);
+void      ui_unlock(void);
+int       ui_chord_half_width(int y);       /* half of the usable width at screen row y */
 lv_obj_t *ui_make_screen(void);
 lv_obj_t *ui_make_round_button(lv_obj_t *parent, const char *symbol, int size, lv_color_t bg);
-lv_obj_t *ui_make_status_bar(lv_obj_t *screen);   /* returns the label to update */
-void      ui_update_status_label(lv_obj_t *label);
+lv_obj_t *ui_make_pill(lv_obj_t *parent, const char *text, int w, int h, lv_color_t bg, const lv_font_t *font);
+lv_obj_t *ui_make_handle(lv_obj_t *parent);
+void      ui_anim(lv_obj_t *obj, int32_t from, int32_t to, uint32_t ms, lv_anim_exec_xcb_t exec,
+                  lv_anim_path_cb_t path);
+void      ui_anim_y(lv_obj_t *obj, int32_t to, uint32_t ms, lv_anim_path_cb_t path);
+void      ui_anim_opa(lv_obj_t *obj, lv_opa_t to, uint32_t ms);
+void      ui_breathe(lv_obj_t *obj);        /* quick scale pulse */
+void      ui_fade_bg(lv_obj_t *obj, lv_color_t to, uint32_t ms);
+void      ui_fade_shadow(lv_obj_t *obj, lv_color_t to, uint32_t ms);
+void      ui_arc_ring_style(lv_obj_t *arc, int width, lv_color_t indicator);
 
-/* screen-level refresh hooks (implemented in the screen files) */
-void ui_home_refresh(void);
+/* Text laid along a circle (per-character labels). */
+#define UI_ARC_TEXT_MAX 20
+typedef struct {
+    lv_obj_t *chars[UI_ARC_TEXT_MAX];
+    int n;
+} ui_arc_text_t;
+void ui_arc_text_set(ui_arc_text_t *t, lv_obj_t *parent, const char *text, int cx, int cy,
+                     int radius, int center_angle_deg, const lv_font_t *font, lv_color_t color);
+
+/* ---- screen modules -------------------------------------------------------- */
+void     ui_desk_create(lv_obj_t *screen);
+void     ui_desk_rebuild(void);             /* lights added/removed */
+void     ui_desk_refresh_light(uint16_t addr);
+void     ui_desk_refresh_link(void);
+uint16_t ui_desk_current_addr(void);        /* 0 = master page */
+void     ui_desk_goto(int page, bool animate); /* 0 = master, n = n-th light */
+lv_obj_t *ui_desk_screen(void);
+
+void ui_scenes_create(lv_obj_t *screen);
+void ui_scenes_refresh(void);
+void ui_scenes_set_open(bool open, bool animate);
+bool ui_scenes_is_open(void);
+
+void ui_system_create(lv_obj_t *screen);
+void ui_system_refresh(void);
+void ui_system_set_open(bool open, bool animate);
+bool ui_system_is_open(void);
+
 void ui_pair_refresh(void);
-void ui_control_refresh(uint16_t addr);
 
 #ifdef __cplusplus
 }

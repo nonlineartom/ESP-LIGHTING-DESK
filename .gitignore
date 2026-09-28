@@ -6,3 +6,7 @@ managed_components/
 tests/host/run_tests
 *.o
 .vscode/
+tools/sim/obj/
+tools/sim/liblvgl.a
+tools/sim/render
+tools/sim/out/

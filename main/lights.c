@@ -63,6 +63,7 @@ light_t *lights_add(const uint8_t uuid[16], uint16_t addr, uint8_t elem_count,
     /* sensible defaults until the fixture reports */
     l->state.mode = LIGHT_MODE_CCT;
     l->state.intensity = 500;
+    l->state.level = 500;
     l->state.cct = 5600;
     l->state.sat = 100;
     return l;

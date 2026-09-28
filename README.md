@@ -6,9 +6,14 @@ Sidus Bluetooth mesh — no phone, no Sidus Link Pro, no amaran Desktop.
 Hardware: **Waveshare ESP32-P4-WIFI6-Touch-LCD-4C** (ESP32-P4 + ESP32-C6
 radio co-processor, 4-inch 720×720 round touch display).
 
-Phase 1 (this repository): pair a light from the touchscreen, control power,
-intensity, CCT / green-magenta and HSI colour, and show a live preview of
-what the light is doing.
+Phase 1: pair a light from the touchscreen, control power, intensity,
+CCT / green-magenta and HSI colour, and show a live preview of what the
+light is doing.  Phase 2 (front end, done ahead of hardware testing): the
+round lighting desk — a swipeable channel carousel with a grand master,
+ring faders on the rim, and a scenes drawer with save / recall.  See
+`docs/UI_DESIGN.md` and the renders in `docs/ui/`.
+
+![MeshDeck screens](docs/ui/contact_sheet.png)
 
 ## How it works
 
@@ -67,6 +72,7 @@ components/
   esp_lcd_touch*/   vendored from espressif/esp-bsp
   esp_lcd_jd9365/   vendored from espressif/esp-iot-solution
 tests/host/         host unit tests (gcc + OpenSSL)
+tools/sim/          headless LVGL renderer: screenshots of every screen without hardware
 docs/               research notes, protocol summary, hardware test plan
 ```
 
@@ -85,10 +91,11 @@ idf.py build
 idf.py -p /dev/cu.usbmodem* flash monitor      # USB-C "UART" port of the board
 ```
 
-Host tests:
+Host tests and UI renders (no hardware needed):
 
 ```bash
-cd tests/host && make test
+cd tests/host && make test               # protocol unit tests
+cd tools/sim && make && ./render && python3 to_png.py   # writes out/*.png + contact sheets
 ```
 
 ## Before the first flash: the ESP32-C6 co-processor
@@ -149,10 +156,22 @@ Telink "fast provisioning" flow instead of standard PB-GATT (the app supports
 both; standard is expected), the exact model that must hold the AppKey is
 unknown (we bind all of them), and the C6 factory image may lack Bluetooth.
 
+## Using the desk
+
+* **Swipe left / right** between the Master page and each light.  Drag the
+  rim ring for intensity (on Master it is the grand master and scales every
+  channel).  Tap the centre disc for power.  CCT / HSI chips switch the lower
+  band between colour temperature + green/magenta arcs and a hue wheel +
+  saturation arc.
+* **Swipe up** for Scenes: tap to recall, long-press to overwrite with the
+  current look, bin to delete, "+" to save the current look.
+* **Swipe down** for the system sheet: link status, pair a light, rename the
+  current light (cycles studio names), remove it, factory reset.
+
 ## Roadmap
 
-* **Phase 2** — lighting console: multiple lights, groups, scenes (save /
-  recall), effects.
+* **Phase 2 (remaining)** — effects (the opcodes are documented in the
+  amaran-hacs project), groups, free-text naming, fade times.
 * **Phase 3** — Wi-Fi: join existing infrastructure through the C6
   (`esp_wifi_remote` is already in the tree), remote / web control, optional
   import of an existing Sidus network from an amaran Desktop export instead

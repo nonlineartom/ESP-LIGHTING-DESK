@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "lights.h"
+#include "scenes.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -67,6 +68,19 @@ void app_cmd_set_hsi(uint16_t addr, uint16_t hue, uint8_t sat, uint16_t intensit
 void app_cmd_request_status(uint16_t addr);
 void app_cmd_remove_light(uint16_t addr);
 void app_cmd_factory_reset(void);
+void app_cmd_rename_light(uint16_t addr, const char *name);
+
+/* desk-level control */
+void app_cmd_master_level(uint16_t level_0_1000);      /* grand master, scales every channel */
+void app_cmd_all_power(bool on);
+void app_cmd_all_cct(uint16_t kelvin);                 /* every light to CCT mode at this temperature */
+uint16_t app_core_master_level(void);
+
+/* scenes */
+void app_cmd_scene_save(int idx);                      /* -1 = new slot; existing = overwrite */
+void app_cmd_scene_recall(int idx);
+void app_cmd_scene_delete(int idx);
+int  app_core_last_scene(void);                        /* last recalled scene or -1 */
 
 #ifdef __cplusplus
 }

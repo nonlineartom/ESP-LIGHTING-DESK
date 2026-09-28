@@ -153,6 +153,32 @@ int store_save_lights(void)
     return err == ESP_OK ? 0 : -1;
 }
 
+int store_load_scenes(void)
+{
+    memset(g_scenes, 0, sizeof(g_scenes));
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return -1;
+    size_t len = sizeof(g_scenes);
+    esp_err_t err = nvs_get_blob(h, "scenes", g_scenes, &len);
+    nvs_close(h);
+    if (err != ESP_OK || len != sizeof(g_scenes)) {
+        memset(g_scenes, 0, sizeof(g_scenes));
+        return -1;
+    }
+    return scenes_count();
+}
+
+int store_save_scenes(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return -1;
+    esp_err_t err = nvs_set_blob(h, "scenes", g_scenes, sizeof(g_scenes));
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    if (err != ESP_OK) ESP_LOGE(TAG, "save scenes: %s", esp_err_to_name(err));
+    return err == ESP_OK ? 0 : -1;
+}
+
 int store_erase(void)
 {
     nvs_handle_t h;

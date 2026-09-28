@@ -24,7 +24,8 @@ typedef enum {
 typedef struct {
     bool         on;
     light_mode_t mode;
-    uint16_t     intensity;   /* 0..1000 */
+    uint16_t     intensity;   /* 0..1000 output level as reported/commanded */
+    uint16_t     level;       /* 0..1000 channel fader before the grand master */
     uint16_t     cct;         /* kelvin */
     int8_t       gm;          /* -10..+10 */
     uint16_t     hue;         /* 0..360 */

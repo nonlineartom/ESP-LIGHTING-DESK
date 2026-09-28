@@ -1,22 +1,64 @@
 #include "ui.h"
 
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+
 #include "app_core.h"
-#include "board.h"
+
+#ifndef MESHDECK_HOST_SIM
 #include "esp_log.h"
-
+#include "esp_lvgl_port.h"
 static const char *TAG = "ui";
+#define UI_LOGI(...) ESP_LOGI(TAG, __VA_ARGS__)
+#else
+#define UI_LOGI(...) do { } while (0)
+#endif
 
-const lv_font_t *ui_font_small;
-const lv_font_t *ui_font_normal;
-const lv_font_t *ui_font_large;
-const lv_font_t *ui_font_title;
-lv_color_t ui_col_bg, ui_col_panel, ui_col_accent, ui_col_text, ui_col_muted, ui_col_ok, ui_col_warn;
+const lv_font_t *ui_font_small, *ui_font_normal, *ui_font_medium, *ui_font_large, *ui_font_title, *ui_font_huge;
+lv_color_t ui_col_bg, ui_col_panel, ui_col_panel_hi, ui_col_track, ui_col_accent, ui_col_accent_dark,
+           ui_col_text, ui_col_muted, ui_col_ok, ui_col_warn;
 
-static uint16_t s_control_addr;
-static enum { SCR_HOME, SCR_PAIR, SCR_CONTROL } s_current;
+static lv_obj_t *s_desk;
+static lv_obj_t *s_pair_scr;
+static enum { SCR_DESK, SCR_PAIR } s_current;
 
 /* ------------------------------------------------------------------------- */
-/* theme + helpers                                                            */
+/* platform glue                                                              */
+/* ------------------------------------------------------------------------- */
+
+uint32_t ui_now_ms(void) { return lv_tick_get(); }
+
+bool ui_lock(uint32_t timeout_ms)
+{
+#ifdef MESHDECK_HOST_SIM
+    (void)timeout_ms;
+    return true;
+#else
+    return lvgl_port_lock(timeout_ms);
+#endif
+}
+
+void ui_unlock(void)
+{
+#ifndef MESHDECK_HOST_SIM
+    lvgl_port_unlock();
+#endif
+}
+
+/* ------------------------------------------------------------------------- */
+/* geometry                                                                   */
+/* ------------------------------------------------------------------------- */
+
+int ui_chord_half_width(int y)
+{
+    int d = y - UI_CY;
+    int r2 = UI_R * UI_R - d * d;
+    return r2 > 0 ? (int)sqrt((double)r2) : 0;
+}
+
+/* ------------------------------------------------------------------------- */
+/* widgets                                                                    */
 /* ------------------------------------------------------------------------- */
 
 lv_obj_t *ui_make_screen(void)
@@ -26,7 +68,7 @@ lv_obj_t *ui_make_screen(void)
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_set_style_text_color(scr, ui_col_text, 0);
     lv_obj_set_style_text_font(scr, ui_font_normal, 0);
-    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
     return scr;
 }
 
@@ -46,30 +88,190 @@ lv_obj_t *ui_make_round_button(lv_obj_t *parent, const char *symbol, int size, l
     return btn;
 }
 
-lv_obj_t *ui_make_status_bar(lv_obj_t *screen)
+lv_obj_t *ui_make_pill(lv_obj_t *parent, const char *text, int w, int h, lv_color_t bg, const lv_font_t *font)
 {
-    lv_obj_t *lbl = lv_label_create(screen);
-    lv_obj_set_style_text_font(lbl, ui_font_small, 0);
-    lv_obj_set_style_text_color(lbl, ui_col_muted, 0);
-    lv_obj_align(lbl, LV_ALIGN_TOP_MID, 0, 44);
-    ui_update_status_label(lbl);
-    return lbl;
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_set_size(btn, w, h);
+    lv_obj_set_style_radius(btn, h / 2, 0);
+    lv_obj_set_style_bg_color(btn, bg, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_lighten(bg, 30), LV_STATE_PRESSED);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    lv_obj_set_style_border_width(btn, 0, 0);
+    lv_obj_set_style_pad_all(btn, 0, 0);
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_font(lbl, font ? font : ui_font_normal, 0);
+    lv_obj_center(lbl);
+    return btn;
 }
 
-void ui_update_status_label(lv_obj_t *label)
+lv_obj_t *ui_make_handle(lv_obj_t *parent)
 {
-    link_state_t st = app_core_link_state();
-    const char *sym = LV_SYMBOL_BLUETOOTH;
-    lv_color_t col = ui_col_muted;
-    switch (st) {
-    case LINK_ONLINE:    col = ui_col_ok; break;
-    case LINK_SCANNING:
-    case LINK_CONNECTING: col = ui_col_accent; break;
-    case LINK_PAIRING:   col = ui_col_accent; break;
-    default: break;
+    lv_obj_t *h = lv_obj_create(parent);
+    lv_obj_set_size(h, 64, 6);
+    lv_obj_set_style_radius(h, 3, 0);
+    lv_obj_set_style_bg_color(h, ui_col_muted, 0);
+    lv_obj_set_style_border_width(h, 0, 0);
+    lv_obj_remove_flag(h, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    return h;
+}
+
+void ui_arc_ring_style(lv_obj_t *arc, int width, lv_color_t indicator)
+{
+    lv_obj_set_style_arc_width(arc, width, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(arc, width, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(arc, ui_col_track, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(arc, indicator, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(arc, true, LV_PART_MAIN);
+    lv_obj_set_style_arc_rounded(arc, true, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(arc, ui_col_text, LV_PART_KNOB);
+    lv_obj_set_style_bg_opa(arc, LV_OPA_COVER, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(arc, width / 2 + 3, LV_PART_KNOB);
+    lv_obj_set_style_shadow_width(arc, 18, LV_PART_KNOB);
+    lv_obj_set_style_shadow_color(arc, indicator, LV_PART_KNOB);
+    lv_obj_set_style_shadow_opa(arc, LV_OPA_60, LV_PART_KNOB);
+    lv_obj_set_style_bg_opa(arc, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_ext_click_area(arc, 24);
+}
+
+/* ------------------------------------------------------------------------- */
+/* animation helpers                                                          */
+/* ------------------------------------------------------------------------- */
+
+void ui_anim(lv_obj_t *obj, int32_t from, int32_t to, uint32_t ms, lv_anim_exec_xcb_t exec,
+             lv_anim_path_cb_t path)
+{
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, obj);
+    lv_anim_set_values(&a, from, to);
+    lv_anim_set_duration(&a, ms);
+    lv_anim_set_exec_cb(&a, exec);
+    lv_anim_set_path_cb(&a, path ? path : lv_anim_path_ease_out);
+    lv_anim_start(&a);
+}
+
+static void anim_set_y(void *obj, int32_t v) { lv_obj_set_y((lv_obj_t *)obj, v); }
+static void anim_set_opa(void *obj, int32_t v) { lv_obj_set_style_opa((lv_obj_t *)obj, (lv_opa_t)v, 0); }
+static void anim_set_scale(void *obj, int32_t v) { lv_obj_set_style_transform_scale((lv_obj_t *)obj, v, 0); }
+
+void ui_anim_y(lv_obj_t *obj, int32_t to, uint32_t ms, lv_anim_path_cb_t path)
+{
+    lv_anim_delete(obj, anim_set_y);
+    ui_anim(obj, lv_obj_get_y(obj), to, ms, anim_set_y, path);
+}
+
+void ui_anim_opa(lv_obj_t *obj, lv_opa_t to, uint32_t ms)
+{
+    lv_anim_delete(obj, anim_set_opa);
+    ui_anim(obj, lv_obj_get_style_opa(obj, 0), to, ms, anim_set_opa, lv_anim_path_linear);
+}
+
+void ui_breathe(lv_obj_t *obj)
+{
+    lv_obj_set_style_transform_pivot_x(obj, lv_obj_get_width(obj) / 2, 0);
+    lv_obj_set_style_transform_pivot_y(obj, lv_obj_get_height(obj) / 2, 0);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, obj);
+    lv_anim_set_values(&a, 256, 276);
+    lv_anim_set_duration(&a, 90);
+    lv_anim_set_playback_duration(&a, 90);
+    lv_anim_set_exec_cb(&a, anim_set_scale);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_start(&a);
+}
+
+/* colour crossfades keep the target colour in the object's user data */
+typedef struct { lv_color_t from, to; } fade_t;
+static void fade_bg_exec(void *obj, int32_t v)
+{
+    fade_t *f = (fade_t *)lv_obj_get_user_data((lv_obj_t *)obj);
+    if (!f) return;
+    lv_obj_set_style_bg_color((lv_obj_t *)obj, lv_color_mix(f->to, f->from, (lv_opa_t)v), 0);
+}
+static void fade_sh_exec(void *obj, int32_t v)
+{
+    fade_t *f = (fade_t *)lv_obj_get_user_data((lv_obj_t *)obj);
+    if (!f) return;
+    lv_obj_set_style_shadow_color((lv_obj_t *)obj, lv_color_mix(f->to, f->from, (lv_opa_t)v), 0);
+}
+
+void ui_fade_bg(lv_obj_t *obj, lv_color_t to, uint32_t ms)
+{
+    fade_t *f = (fade_t *)lv_obj_get_user_data(obj);
+    if (!f) {
+        f = lv_malloc(sizeof(fade_t));
+        f->from = f->to = lv_obj_get_style_bg_color(obj, 0);
+        lv_obj_set_user_data(obj, f);
     }
-    lv_label_set_text_fmt(label, "%s  %s", sym, app_core_link_text());
-    lv_obj_set_style_text_color(label, col, 0);
+    f->from = lv_obj_get_style_bg_color(obj, 0);
+    f->to = to;
+    lv_anim_delete(obj, fade_bg_exec);
+    ui_anim(obj, 0, 255, ms, fade_bg_exec, lv_anim_path_linear);
+}
+
+void ui_fade_shadow(lv_obj_t *obj, lv_color_t to, uint32_t ms)
+{
+    fade_t *f = (fade_t *)lv_obj_get_user_data(obj);
+    if (!f) {
+        f = lv_malloc(sizeof(fade_t));
+        f->from = f->to = lv_obj_get_style_shadow_color(obj, 0);
+        lv_obj_set_user_data(obj, f);
+    }
+    /* shadow shares the same target as bg for preview discs */
+    f->to = to;
+    lv_anim_delete(obj, fade_sh_exec);
+    ui_anim(obj, 0, 255, ms, fade_sh_exec, lv_anim_path_linear);
+}
+
+/* ------------------------------------------------------------------------- */
+/* text along an arc                                                          */
+/* ------------------------------------------------------------------------- */
+
+void ui_arc_text_set(ui_arc_text_t *t, lv_obj_t *parent, const char *text, int cx, int cy,
+                     int radius, int center_angle_deg, const lv_font_t *font, lv_color_t color)
+{
+    for (int i = 0; i < t->n; i++) {
+        if (t->chars[i]) lv_obj_delete(t->chars[i]);
+        t->chars[i] = NULL;
+    }
+    t->n = 0;
+    if (!text) return;
+
+    int n = (int)strlen(text);
+    if (n > UI_ARC_TEXT_MAX) n = UI_ARC_TEXT_MAX;
+    int widths[UI_ARC_TEXT_MAX], total = 0;
+    const int spacing = 3;
+    for (int i = 0; i < n; i++) {
+        widths[i] = lv_text_get_width(text + i, 1, font, 0);
+        if (widths[i] < 4) widths[i] = 6;    /* spaces */
+        total += widths[i] + spacing;
+    }
+    total -= spacing;
+    double deg_per_px = 180.0 / (M_PI * radius);
+    double start = center_angle_deg - (total * deg_per_px) / 2.0;
+    int lh = lv_font_get_line_height(font);
+    double acc = 0;
+    for (int i = 0; i < n; i++) {
+        double theta = start + (acc + widths[i] / 2.0) * deg_per_px;
+        double rad = theta * M_PI / 180.0;
+        int px = cx + (int)lround(radius * cos(rad));
+        int py = cy + (int)lround(radius * sin(rad));
+        lv_obj_t *c = lv_label_create(parent);
+        char s[2] = { text[i], 0 };
+        lv_label_set_text(c, s);
+        lv_obj_set_style_text_font(c, font, 0);
+        lv_obj_set_style_text_color(c, color, 0);
+        lv_obj_set_size(c, widths[i] + 2, lh);
+        lv_obj_set_pos(c, px - (widths[i] + 2) / 2, py - lh / 2);
+        lv_obj_set_style_transform_pivot_x(c, (widths[i] + 2) / 2, 0);
+        lv_obj_set_style_transform_pivot_y(c, lh / 2, 0);
+        lv_obj_set_style_transform_rotation(c, (int32_t)lround((theta + 90.0) * 10.0), 0);
+        lv_obj_remove_flag(c, LV_OBJ_FLAG_CLICKABLE);
+        t->chars[t->n++] = c;
+        acc += widths[i] + spacing;
+    }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -80,67 +282,85 @@ void ui_init(void)
 {
     ui_font_small  = &lv_font_montserrat_16;
     ui_font_normal = &lv_font_montserrat_20;
+    ui_font_medium = &lv_font_montserrat_24;
     ui_font_large  = &lv_font_montserrat_28;
     ui_font_title  = &lv_font_montserrat_36;
-    ui_col_bg     = lv_color_hex(0x0b0e14);
-    ui_col_panel  = lv_color_hex(0x181d27);
-    ui_col_accent = lv_color_hex(0xffb347);
-    ui_col_text   = lv_color_hex(0xf3f4f6);
-    ui_col_muted  = lv_color_hex(0x8a93a6);
-    ui_col_ok     = lv_color_hex(0x4cd964);
-    ui_col_warn   = lv_color_hex(0xff5f5f);
+    ui_font_huge   = &lv_font_montserrat_48;
+    ui_col_bg          = lv_color_hex(0x0b0e14);
+    ui_col_panel       = lv_color_hex(0x161b25);
+    ui_col_panel_hi    = lv_color_hex(0x232a38);
+    ui_col_track       = lv_color_hex(0x1e2430);
+    ui_col_accent      = lv_color_hex(0xffb347);
+    ui_col_accent_dark = lv_color_hex(0x1a1408);
+    ui_col_text        = lv_color_hex(0xf3f4f6);
+    ui_col_muted       = lv_color_hex(0x8a93a6);
+    ui_col_ok          = lv_color_hex(0x4cd964);
+    ui_col_warn        = lv_color_hex(0xff5f5f);
 
-    ui_show_home();
-    ESP_LOGI(TAG, "ui ready");
+    /* dark default theme so containers/msgboxes inherit light text */
+    lv_display_t *disp = lv_display_get_default();
+    if (disp) {
+        lv_theme_t *th = lv_theme_default_init(disp, ui_col_accent, ui_col_panel_hi, true, ui_font_normal);
+        lv_display_set_theme(disp, th);
+    }
+
+    s_desk = ui_make_screen();
+    ui_desk_create(s_desk);
+    ui_scenes_create(s_desk);
+    ui_system_create(s_desk);
+    lv_screen_load(s_desk);
+    s_current = SCR_DESK;
+    UI_LOGI("ui ready");
 }
 
-void ui_show_home(void)
+void ui_show_desk(void)
 {
-    s_current = SCR_HOME;
-    ui_home_refresh();
+    if (s_current == SCR_DESK) return;
+    s_current = SCR_DESK;
+    ui_desk_rebuild();
+    lv_screen_load_anim(s_desk, LV_SCR_LOAD_ANIM_MOVE_BOTTOM, 260, 0, false);
 }
 
 void ui_show_pair(void)
 {
     s_current = SCR_PAIR;
+    ui_system_set_open(false, false);
+    ui_scenes_set_open(false, false);
     ui_pair_refresh();
-}
-
-void ui_show_control(uint16_t addr)
-{
-    s_current = SCR_CONTROL;
-    s_control_addr = addr;
-    ui_control_refresh(addr);
+    extern lv_obj_t *ui_pair_screen(void);
+    s_pair_scr = ui_pair_screen();
+    lv_screen_load_anim(s_pair_scr, LV_SCR_LOAD_ANIM_MOVE_TOP, 260, 0, false);
 }
 
 /* ------------------------------------------------------------------------- */
 /* notifications from the application task                                   */
 /* ------------------------------------------------------------------------- */
 
-#define WITH_LOCK(body) do { if (board_lvgl_lock(200)) { body; board_lvgl_unlock(); } } while (0)
+#define WITH_LOCK(body) do { if (ui_lock(200)) { body; ui_unlock(); } } while (0)
 
 void ui_notify_link_changed(void)
 {
     WITH_LOCK({
-        if (s_current == SCR_HOME) ui_home_refresh();
-        else if (s_current == SCR_CONTROL) ui_control_refresh(s_control_addr);
-        else ui_pair_refresh();
+        ui_desk_refresh_link();
+        ui_system_refresh();
+        if (s_current == SCR_PAIR) ui_pair_refresh();
     });
 }
 
 void ui_notify_lights_changed(void)
 {
     WITH_LOCK({
-        if (s_current == SCR_HOME) ui_home_refresh();
-        else if (s_current == SCR_CONTROL) ui_control_refresh(s_control_addr);
+        ui_desk_rebuild();
+        ui_scenes_refresh();
+        ui_system_refresh();
     });
 }
 
 void ui_notify_light_state(uint16_t addr)
 {
     WITH_LOCK({
-        if (s_current == SCR_HOME) ui_home_refresh();
-        else if (s_current == SCR_CONTROL && addr == s_control_addr) ui_control_refresh(addr);
+        ui_desk_refresh_light(addr);
+        ui_scenes_refresh();
     });
 }
 
