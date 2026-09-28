@@ -16,6 +16,7 @@
 #include "mesh_crypto.h"
 #include "mesh_net.h"
 #include "mesh_prov.h"
+#include "products.h"
 #include "store.h"
 #include "telink.h"
 #include "ui.h"
@@ -680,12 +681,19 @@ static void handle_unprov_adv(const ble_adv_t *adv)
         idx = s_unprov_n++;
         memset(&s_unprov[idx], 0, sizeof(s_unprov[idx]));
         memcpy(s_unprov[idx].uuid, adv->unprov.uuid, 16);
-        ESP_LOGI(TAG, "unprovisioned device: %s rssi=%d", adv->name[0] ? adv->name : "(no name)", adv->rssi);
+        const uint8_t *u = adv->unprov.uuid;
+        const char *pn = sidus_product_from_uuid(adv->unprov.uuid);
+        ESP_LOGI(TAG, "unprovisioned device: %s rssi=%d uuid=%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x oob=0x%04x",
+                 pn ? pn : adv->name[0] ? adv->name : "(no name)", adv->rssi,
+                 u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15],
+                 adv->unprov.oob_info);
     }
     memcpy(s_unprov[idx].addr, adv->addr, 6);
     s_unprov[idx].addr_type = adv->addr_type;
     s_unprov[idx].rssi = adv->rssi;
-    if (adv->name[0]) snprintf(s_unprov[idx].name, sizeof(s_unprov[idx].name), "%s", adv->name);
+    const char *product = sidus_product_from_uuid(adv->unprov.uuid);
+    if (product) snprintf(s_unprov[idx].name, sizeof(s_unprov[idx].name), "%s", product);
+    else if (adv->name[0]) snprintf(s_unprov[idx].name, sizeof(s_unprov[idx].name), "%s", adv->name);
     s_unprov[idx].last_seen_ms = now_ms();
     app_core_unlock();
     s_pair_dirty = true;
@@ -1480,13 +1488,30 @@ static void init_network(void)
     ESP_LOGI(TAG, "network ready: nid=0x%02x aid=0x%02x iv=%lu seq=%lu lights=%d next_addr=0x%04x",
              s_net.nid, s_net.aid, (unsigned long)s_net.iv_index, (unsigned long)s_net.seq,
              lights_count(), s_netcfg.next_addr);
+    bool renamed = false;
+    for (int i = 0; i < LIGHTS_MAX; i++) {
+        if (g_lights[i].used && lights_apply_product_name(&g_lights[i])) renamed = true;
+    }
+    if (renamed) save_lights();
+    for (int i = 0; i < LIGHTS_MAX; i++) {
+        const light_t *l = &g_lights[i];
+        if (!l->used) continue;
+        const uint8_t *u = l->uuid;
+        ESP_LOGI(TAG, "  light 0x%04x '%s' cid=0x%04x pid=0x%04x uuid=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
+                 l->addr, l->name, l->cid, l->pid,
+                 u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15]);
+    }
 }
 
-void app_core_start(void)
+void app_core_init(void)
 {
     s_lock = xSemaphoreCreateRecursiveMutex();
     s_queue = xQueueCreate(24, sizeof(app_event_t));
     init_network();
+}
+
+void app_core_start(void)
+{
 
     const esp_timer_create_args_t targs = { .callback = tick_cb, .name = "core_tick" };
     esp_timer_create(&targs, &s_tick_timer);

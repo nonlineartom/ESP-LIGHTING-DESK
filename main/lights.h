@@ -71,6 +71,9 @@ light_t *lights_find_by_addr(uint16_t addr);          /* any element address of 
 light_t *lights_find_by_uuid(const uint8_t uuid[16]);
 light_t *lights_add(const uint8_t uuid[16], uint16_t addr, uint8_t elem_count,
                     const uint8_t devkey[16], const char *name);
+/* Name a light "Light N" (or keep a given name) unless its UUID identifies
+ * the fixture, then use the product name ("amaran PT2c", "amaran PT2c 2"). */
+bool     lights_apply_product_name(light_t *l);
 void     lights_remove(light_t *l);
 void     lights_apply_status(light_t *l, const telink_status_t *st, uint32_t now_ms);
 

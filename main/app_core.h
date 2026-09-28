@@ -44,6 +44,10 @@ typedef struct {
 
 #define UNPROV_MAX 12
 
+/* app_core_init: create the state lock and load the stored network + lights.
+ * Call before ui_init() (the UI reads g_lights under the lock).
+ * app_core_start: timers, the core task and BLE. */
+void app_core_init(void);
 void app_core_start(void);
 
 /* state access (lock while reading g_lights or the pairing list) */

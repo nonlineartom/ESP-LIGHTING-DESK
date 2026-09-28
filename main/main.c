@@ -20,6 +20,7 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "MeshDeck starting");
     store_init();
+    app_core_init();
 
     if (board_init() != ESP_OK) {
         ESP_LOGE(TAG, "board init failed; continuing headless");

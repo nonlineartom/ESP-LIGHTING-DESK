@@ -1,5 +1,6 @@
 #include "ble_central.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -53,10 +54,39 @@ static void emit(ble_evt_t evt, const void *data, size_t len)
 /* scanning                                                                   */
 /* ------------------------------------------------------------------------- */
 
+/* Lights put their name in the scan response, which carries no service data,
+ * so remember names per address and attach them to the mesh adverts. */
+#define NAME_CACHE_N 16
+static struct { uint8_t addr[6]; char name[BLE_ADV_NAME_LEN]; } s_names[NAME_CACHE_N];
+static int s_names_next;
+
+static void name_cache_put(const uint8_t addr[6], const uint8_t *name, size_t len)
+{
+    int slot = -1;
+    for (int i = 0; i < NAME_CACHE_N; i++) {
+        if (memcmp(s_names[i].addr, addr, 6) == 0 && s_names[i].name[0]) { slot = i; break; }
+    }
+    if (len > BLE_ADV_NAME_LEN - 1) len = BLE_ADV_NAME_LEN - 1;
+    if (slot >= 0 && strlen(s_names[slot].name) == len && memcmp(s_names[slot].name, name, len) == 0) return;
+    if (slot < 0) { slot = s_names_next; s_names_next = (s_names_next + 1) % NAME_CACHE_N; }
+    memcpy(s_names[slot].addr, addr, 6);
+    memcpy(s_names[slot].name, name, len);
+    s_names[slot].name[len] = 0;
+}
+
+static const char *name_cache_get(const uint8_t addr[6])
+{
+    for (int i = 0; i < NAME_CACHE_N; i++) {
+        if (s_names[i].name[0] && memcmp(s_names[i].addr, addr, 6) == 0) return s_names[i].name;
+    }
+    return NULL;
+}
+
 static void handle_disc(const struct ble_gap_disc_desc *disc)
 {
     struct ble_hs_adv_fields fields;
     if (ble_hs_adv_parse_fields(&fields, disc->data, disc->length_data) != 0) return;
+    if (fields.name && fields.name_len) name_cache_put(disc->addr.val, fields.name, fields.name_len);
     if (!fields.svc_data_uuid16 || fields.svc_data_uuid16_len < 2) return;
 
     uint16_t uuid = (uint16_t)(fields.svc_data_uuid16[0] | (fields.svc_data_uuid16[1] << 8));
@@ -71,6 +101,9 @@ static void handle_disc(const struct ble_gap_disc_desc *disc)
     if (fields.name && fields.name_len) {
         size_t n = fields.name_len < BLE_ADV_NAME_LEN - 1 ? fields.name_len : BLE_ADV_NAME_LEN - 1;
         memcpy(adv.name, fields.name, n);
+    } else {
+        const char *cached = name_cache_get(disc->addr.val);
+        if (cached) snprintf(adv.name, sizeof(adv.name), "%s", cached);
     }
 
     if (uuid == UUID_MESH_PROV_SVC && sdlen >= 16) {

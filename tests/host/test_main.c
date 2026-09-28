@@ -16,6 +16,8 @@
 #include "mesh_prov.h"
 #include "mesh_cfg.h"
 #include "telink.h"
+#include "products.h"
+#include "lights.h"
 
 static int g_fail = 0, g_pass = 0;
 
@@ -385,6 +387,36 @@ static void test_telink(void)
                                st.hue == 200 && st.sat == 55 && st.intensity == 640);
 }
 
+static void test_products(void)
+{
+    /* UUID captured from an amaran PT2c: "400H5-DBFA30" + 01 0f 0f 0f */
+    uint8_t pt2c[16], other[16], junk[16];
+    hex2bin("34303048352d444246413330010f0f0f", pt2c, 16);
+    hex2bin("34303048352d112233445566010f0f0f", other, 16);
+    hex2bin("0123456789abcdef0123456789abcdef", junk, 16);
+    char code[6], tail[7];
+    CHECK("uuid product code", sidus_uuid_product_code(pt2c, code) && strcmp(code, "400H5") == 0);
+    CHECK("uuid mac tail", sidus_uuid_mac_tail(pt2c, tail) && strcmp(tail, "DBFA30") == 0);
+    const char *pn = sidus_product_from_uuid(pt2c);
+    CHECK("uuid product name", pn && strcmp(pn, "amaran PT2c") == 0);
+    CHECK("100x code", sidus_product_name("40035") && strcmp(sidus_product_name("40035"), "amaran 100x") == 0);
+    CHECK("non-sidus uuid", !sidus_uuid_product_code(junk, code) && !sidus_product_from_uuid(junk));
+    CHECK("unknown code", sidus_product_name("ZZZZZ") == NULL);
+
+    uint8_t dk[16] = {0};
+    memset(g_lights, 0, sizeof(g_lights));
+    light_t *a = lights_add(pt2c, 2, 1, dk, "");
+    light_t *b = lights_add(other, 3, 1, dk, "Mesh Device");
+    CHECK("add names product", a && strcmp(a->name, "amaran PT2c") == 0);
+    CHECK("add dedupes product", b && strcmp(b->name, "amaran PT2c 2") == 0);
+    light_t *c = lights_add(junk, 4, 1, dk, "");
+    CHECK("add non-sidus fallback", c && strncmp(c->name, "Light ", 6) == 0);
+    snprintf(a->name, sizeof(a->name), "Light 1");
+    CHECK("migrate generic name", lights_apply_product_name(a) && strcmp(a->name, "amaran PT2c") == 0);
+    snprintf(a->name, sizeof(a->name), "Key light");
+    CHECK("keep user name", !lights_apply_product_name(a) && strcmp(a->name, "Key light") == 0);
+}
+
 int main(void)
 {
     test_cmac();
@@ -397,6 +429,7 @@ int main(void)
     test_prov_flow();
     test_cfg();
     test_telink();
+    test_products();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

@@ -5,7 +5,7 @@ CC     ?= gcc
 CFLAGS := -O1 -g -std=gnu11 -w -DLV_CONF_INCLUDE_SIMPLE -I. -I$(LVGL) -I../../main -I../../main/ui -DMESHDECK_HOST_SIM
 LV_SRCS := $(shell find $(LVGL)/src -name '*.c')
 LV_OBJS := $(patsubst $(LVGL)/src/%.c,obj/lvgl/%.o,$(LV_SRCS))
-UI_SRCS := $(wildcard ../../main/ui/*.c) ../../main/lights.c ../../main/scenes.c ../../main/telink.c
+UI_SRCS := $(wildcard ../../main/ui/*.c) ../../main/lights.c ../../main/products.c ../../main/scenes.c ../../main/telink.c
 SIM_SRCS := render.c stubs.c
 
 all: render

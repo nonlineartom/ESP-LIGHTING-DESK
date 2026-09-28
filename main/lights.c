@@ -1,5 +1,8 @@
 #include "lights.h"
 
+#include "products.h"
+
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -32,6 +35,42 @@ light_t *lights_find_by_uuid(const uint8_t uuid[16])
     return NULL;
 }
 
+static bool name_taken(const light_t *self, const char *name)
+{
+    for (int i = 0; i < LIGHTS_MAX; i++) {
+        const light_t *o = &g_lights[i];
+        if (o != self && o->used && strcmp(o->name, name) == 0) return true;
+    }
+    return false;
+}
+
+/* base, then "base 2", "base 3", ... */
+static void set_unique_name(light_t *l, const char *base)
+{
+    snprintf(l->name, sizeof(l->name), "%s", base);
+    for (int n = 2; name_taken(l, l->name) && n <= LIGHTS_MAX + 1; n++) {
+        snprintf(l->name, sizeof(l->name), "%.*s %d", (int)sizeof(l->name) - 4, base, n);
+    }
+}
+
+static bool is_generic_name(const char *name)
+{
+    /* "Light N" from older firmware, or empty */
+    if (!name[0]) return true;
+    if (strncmp(name, "Light ", 6) != 0) return false;
+    for (const char *p = name + 6; *p; p++) if (!isdigit((unsigned char)*p)) return false;
+    return name[6] != 0;
+}
+
+bool lights_apply_product_name(light_t *l)
+{
+    if (!is_generic_name(l->name)) return false;
+    const char *product = sidus_product_from_uuid(l->uuid);
+    if (!product) return false;
+    set_unique_name(l, product);
+    return true;
+}
+
 light_t *lights_add(const uint8_t uuid[16], uint16_t addr, uint8_t elem_count,
                     const uint8_t devkey[16], const char *name)
 {
@@ -51,8 +90,11 @@ light_t *lights_add(const uint8_t uuid[16], uint16_t addr, uint8_t elem_count,
     l->addr = addr;
     l->elem_count = elem_count ? elem_count : 1;
     memcpy(l->devkey, devkey, 16);
-    if (name && name[0]) {
-        snprintf(l->name, sizeof(l->name), "%s", name);
+    const char *product = sidus_product_from_uuid(uuid);
+    if (product) {
+        set_unique_name(l, product);
+    } else if (name && name[0]) {
+        set_unique_name(l, name);
     } else {
         snprintf(l->name, sizeof(l->name), "Light %d", (int)(l - g_lights) + 1);
     }

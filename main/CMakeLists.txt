@@ -9,6 +9,7 @@ idf_component_register(
         "mesh_cfg.c"
         "telink.c"
         "lights.c"
+        "products.c"
         "scenes.c"
         "store.c"
         "app_core.c"

@@ -1,9 +1,12 @@
 # ---------------------------------------------------------------------------
-# MeshDeck defaults — Waveshare ESP32-P4-WIFI6-Touch-LCD-4C (rev3.x silicon)
+# MeshDeck defaults — Waveshare ESP32-P4-WIFI6-Touch-LCD-4C
+# Silicon: ESP32-P4 rev v1.3 (confirmed on the test board with esptool).
+# Rev <3.0 and >=3.0 builds are mutually exclusive in ESP-IDF; a rev3 build
+# will not boot on this board.
 # ---------------------------------------------------------------------------
 CONFIG_IDF_TARGET="esp32p4"
-CONFIG_ESP32P4_SELECTS_REV_LESS_V3=n
-CONFIG_ESP32P4_REV_MIN_300=y
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_100=y
 
 # Flash / partitions (board has 32 MB NOR flash; 16 MB keeps esptool defaults happy)
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
@@ -15,8 +18,9 @@ CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
 
 # PSRAM (32 MB in-package) — LVGL frame buffers live here
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_SPEED_250M=y
-CONFIG_SPIRAM_SPEED=250
+# 250 MHz PSRAM is rev3-only
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_SPEED=200
 CONFIG_SPIRAM_XIP_FROM_PSRAM=y
 CONFIG_CACHE_L2_CACHE_256KB=y
 CONFIG_CACHE_L2_CACHE_LINE_128B=y

@@ -4,6 +4,7 @@
 
 #include "app_core.h"
 #include "ui.h"
+#include "products.h"
 
 static lv_obj_t *s_scr;
 static lv_obj_t *s_hint;
@@ -170,9 +171,15 @@ void ui_pair_refresh(void)
                 memcpy(s_row_uuid[i], devs[i].uuid, 16);
                 lv_label_set_text(s_row_name[i], devs[i].name[0] ? devs[i].name : "Sidus light");
                 const char *sig = devs[i].rssi > -60 ? "strong" : devs[i].rssi > -75 ? "good" : "weak";
-                lv_label_set_text_fmt(s_row_sub[i], "%02X%02X%02X%02X  \xE2\x80\xA2  signal %s (%d dBm)",
-                                      devs[i].uuid[0], devs[i].uuid[1], devs[i].uuid[2], devs[i].uuid[3],
-                                      sig, devs[i].rssi);
+                char tail[7];
+                if (sidus_uuid_mac_tail(devs[i].uuid, tail)) {
+                    lv_label_set_text_fmt(s_row_sub[i], "ID %s  \xE2\x80\xA2  signal %s (%d dBm)",
+                                          tail, sig, devs[i].rssi);
+                } else {
+                    lv_label_set_text_fmt(s_row_sub[i], "%02X%02X%02X%02X  \xE2\x80\xA2  signal %s (%d dBm)",
+                                          devs[i].uuid[0], devs[i].uuid[1], devs[i].uuid[2], devs[i].uuid[3],
+                                          sig, devs[i].rssi);
+                }
             } else {
                 lv_obj_add_flag(s_rows[i], LV_OBJ_FLAG_HIDDEN);
             }
