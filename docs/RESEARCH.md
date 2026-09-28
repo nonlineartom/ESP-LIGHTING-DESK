@@ -54,3 +54,37 @@
   PID the P2C reports.
 * Phase 3 alternative to re-pairing: import an existing Sidus network from the
   amaran Desktop export (keys + addresses), as amaran-hacs does.
+
+## Pixel control on the PT series (researched 2026-09-28, parked)
+
+Goal: WLED-style pixel modes on the amaran PT2c.
+
+* **Per-pixel colour is DMX-only.** Aputure FAQ (PT1c/2c/4c): "To control
+  individual Pixels, however, this function is currently accessible only
+  through DMX."  The PT DMX profile (spec V1.0, archived) has 8-pixel modes
+  for the PT2c: mode 9 (56 ch, CCT & RGB per pixel), mode 13 (24 ch, HSI per
+  pixel).  No CRMX on the PT series; wired DMX via the amaran USB-C to DMX
+  adapter.
+* **On-board Pixel FX are controllable over the mesh** (Sidus Link does it):
+  Color Fade, Color Cycle, One/Two/Three Pixel Chase, Rainbow, Pixel Fire,
+  with speed, direction, 2-4 quantised colours, pixel size, background.
+  No public protocol: amaran-hacs, amaran-BLE-control, amaran-bridge and the
+  amaran Desktop OpenAPI all leave pixel effects out.
+* **The Sidus Link iOS app on the Mac** (`/Applications/Sidus Link.app/Wrapper/
+  SidusLink.app`) carries the protocol library with symbols:
+  - `Frameworks/SLSigMesh.framework/SLSigMesh.bundle/fixtures_config.json`,
+    entry `fixture_400H5_1.0`: `pixelfx_support 1`, `pixelfx_gpA/B/G_support
+    1`, `pixel_num 4` (the manual says 8 - check on hardware),
+    `pixelfx_color_fade_speed 1,640`, `pixelfx_color_cycle_speed 1,100`,
+    partition (zone) support 0.
+  - Main binary `SidusLink`: `pixelFxSendEffectForIndex:state:isSendAll:`,
+    `runningPixelFxAtIndexPacke:isSendAll:`; `SLSigMesh`:
+    `pixelFxSendDirectionForNodeJsonName:isRunning:`.  Disassembling these
+    (otool / Ghidra) should give the payload layout, as amaran-hacs did for
+    the 0x87 effects from the Android APK.
+
+Options, ranked: (1) native Pixel FX - decode from the app, add a "Pixel"
+mode for fixtures with `pixelfx_support`, verify each effect on the tube;
+(2) controller-driven whole-tube animation with 0x81/0x82 frames (one colour
+for the whole tube, possibly capped near 5 Hz); (3) true per-pixel via an
+RS-485 DMX output from the P4.
