@@ -282,6 +282,7 @@ void ui_scenes_set_open(bool open, bool animate)
 {
     if (!s_drawer) return;
     s_open = open;
+    if (open) lv_obj_move_foreground(s_drawer);
     int y = open ? DRAWER_OPEN_Y : DRAWER_CLOSED_Y;
     if (animate) ui_anim_y(s_drawer, y, open ? 260 : 200, open ? lv_anim_path_overshoot : lv_anim_path_ease_in_out);
     else lv_obj_set_y(s_drawer, y);

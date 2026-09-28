@@ -53,6 +53,8 @@ static bool current_light(light_t *copy)
 /* rename screen                                                              */
 /* ------------------------------------------------------------------------- */
 
+bool ui_rename_is_open(void) { return s_rename && !lv_obj_has_flag(s_rename, LV_OBJ_FLAG_HIDDEN); }
+
 static void rename_close(void)
 {
     if (s_rename) lv_obj_add_flag(s_rename, LV_OBJ_FLAG_HIDDEN);

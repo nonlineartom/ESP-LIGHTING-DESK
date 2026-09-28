@@ -29,7 +29,7 @@ static enum { SCR_DESK, SCR_PAIR } s_current;
  * before the direction/distance has been populated. */
 static void on_touch_gesture(lv_event_t *e)
 {
-    if (s_current != SCR_DESK ||
+    if (s_current != SCR_DESK || ui_rename_is_open() ||
         lv_event_get_gesture_type(e) != LV_INDEV_GESTURE_TWO_FINGERS_SWIPE ||
         lv_event_get_gesture_state(e, LV_INDEV_GESTURE_TWO_FINGERS_SWIPE) != LV_INDEV_GESTURE_STATE_RECOGNIZED ||
         lv_event_get_two_fingers_swipe_distance(e) < 80) return;

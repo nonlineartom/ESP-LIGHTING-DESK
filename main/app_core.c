@@ -143,6 +143,7 @@ static uint32_t s_state_ticks;
 static uint32_t s_poll_ticks;
 static uint32_t s_batt_ticks;
 static uint32_t s_last_rx_ms;          /* last mesh message from any light */
+static struct { uint16_t addr; uint8_t step; bool was_on; } s_ident;   /* blink sequence */
 static int      s_batt_index;
 static int      s_poll_index;
 static int      s_refresh_in;          /* ticks until a post-command status refresh */
@@ -405,6 +406,8 @@ static void net_access_rx(void *ctx, uint16_t src, uint16_t dst, bool devkey,
                     l->state.mode = LIGHT_MODE_FX;
                     l->state.fx = fx.fx_id;
                     l->state.intensity = fx.intensity;
+                    uint32_t lv = s_master ? (uint32_t)fx.intensity * 1000 / s_master : fx.intensity;
+                    l->state.level = lv > 1000 ? 1000 : (uint16_t)lv;
                 } else if (l->state.mode == LIGHT_MODE_FX) {
                     l->state.mode = (light_mode_t)l->state.base_mode;
                     l->state.fx = TELINK_FX_NONE;
@@ -477,17 +480,24 @@ static void maybe_save_seq(void)
     if (s_net.iv_index != s_netcfg.iv_index) {
         /* IV Update from a beacon: persist it, or a reboot would go back to the
          * old IV with fresh sequence numbers and reuse nonces. */
-        s_netcfg.iv_index = s_net.iv_index;
-        s_netcfg.seq = s_net.seq + SEQ_RESERVE;
-        s_seq_saved = s_netcfg.seq;
-        store_save_network(&s_netcfg);
-        ESP_LOGI(TAG, "IV index %lu saved", (unsigned long)s_net.iv_index);
+        mesh_network_cfg_t cfg = s_netcfg;
+        cfg.iv_index = s_net.iv_index;
+        cfg.seq = s_net.seq + SEQ_RESERVE;
+        if (store_save_network(&cfg) == 0) {     /* retried on the next PDU if it failed */
+            s_netcfg = cfg;
+            s_seq_saved = cfg.seq;
+            ESP_LOGI(TAG, "IV index %lu saved", (unsigned long)s_net.iv_index);
+        }
         return;
     }
     if (s_net.seq + SEQ_RESERVE_LOW >= s_seq_saved) {
-        s_seq_saved = s_net.seq + SEQ_RESERVE;
-        s_netcfg.seq = s_seq_saved;
-        store_save_seq(s_seq_saved);
+        uint32_t r = s_net.seq + SEQ_RESERVE;
+        if (store_save_seq(r) == 0) {
+            s_seq_saved = r;
+            s_netcfg.seq = r;
+        } else {
+            ESP_LOGE(TAG, "saving the sequence reservation failed");
+        }
     }
 }
 
@@ -892,7 +902,8 @@ static void handle_prov_pdu(const ble_proxy_pdu_t *pdu)
         l->ble_addr_type = s_pending.addr_type;
     }
     s_netcfg.next_addr = s_prov.unicast + s_prov.num_elements;
-    s_netcfg.seq = s_net.seq;
+    /* s_netcfg.seq holds the sequence reservation (see maybe_save_seq):
+     * never overwrite it with the current value */
     app_core_unlock();
     store_save_network(&s_netcfg);
     save_lights();
@@ -1005,6 +1016,7 @@ static void on_ble(ble_evt_t evt, const void *d)
             break;
         case MESH_PROXY_TYPE_BEACON:
             mesh_net_recv_beacon(&s_net, pdu->data, pdu->len);
+            maybe_save_seq();              /* persist an IV Update before sending under it */
             break;
         case MESH_PROXY_TYPE_PROXY_CFG: {
             uint8_t op, params[16];
@@ -1124,7 +1136,8 @@ static void send_look(light_t *l, bool on, light_mode_t mode, uint16_t level,
             vTaskDelay(pdMS_TO_TICKS(60));
             return;
         }
-        mode = (light_mode_t)l->state.base_mode;   /* effect not available: keep the colour */
+        /* effect not available (or scene has it off): keep the current colour mode */
+        mode = l->state.mode == LIGHT_MODE_FX ? (light_mode_t)l->state.base_mode : l->state.mode;
         hue = l->state.hue; sat = l->state.sat; cct = l->state.cct; gm = l->state.gm;
     }
     if (mode == LIGHT_MODE_HSI && !l->has_hsi) mode = LIGHT_MODE_CCT;
@@ -1416,8 +1429,16 @@ static void on_cmd(const app_event_t *ev)
         fade_stop();
         light_t *fl = lights_find_by_addr(ev->cmd.addr);
         if (fl && fl->state.mode == LIGHT_MODE_FX) {   /* effects carry their own level */
-            send_fx(fl, fl->state.fx, ev->cmd.a);
-            schedule_refresh(ev->cmd.addr);
+            if (fl->state.on) {
+                send_fx(fl, fl->state.fx, ev->cmd.a);
+                schedule_refresh(ev->cmd.addr);
+            } else {                                   /* like intensity: never wakes the light */
+                app_core_lock();
+                fl->state.level = ev->cmd.a;
+                fl->state.intensity = scaled(ev->cmd.a);
+                app_core_unlock();
+                ui_notify_light_state(fl->addr);
+            }
             break;
         }
         telink_intensity(scaled(ev->cmd.a), p);
@@ -1460,22 +1481,16 @@ static void on_cmd(const app_event_t *ev)
         fade_stop();
         s_last_scene = -1;
         light_t *xl = lights_find_by_addr(ev->cmd.addr);
-        if (!xl) break;
+        if (!xl || s_state != CS_ONLINE) break;
         uint8_t fx = (uint8_t)ev->cmd.a;
         if (fx < TELINK_FX_COUNT && (xl->fx_mask & (1u << fx))) {
             ESP_LOGI(TAG, "effect %s on 0x%04x", telink_effect_name(fx), xl->addr);
             send_fx(xl, fx, xl->state.level);
         } else if (xl->state.mode == LIGHT_MODE_FX) {
             ESP_LOGI(TAG, "effect off on 0x%04x", xl->addr);
-            if (xl->state.on) {
-                fx_stop_if_running(xl);
-                send_base_look(xl);
-            } else {
-                app_core_lock();
-                xl->state.mode = (light_mode_t)xl->state.base_mode;
-                xl->state.fx = TELINK_FX_NONE;
-                app_core_unlock();
-            }
+            bool was_on = xl->state.on;
+            fx_stop_if_running(xl);                  /* also when off: it would resume on power-up */
+            if (was_on) send_base_look(xl);
             ui_notify_light_state(xl->addr);
         }
         schedule_refresh(ev->cmd.addr);
@@ -1604,21 +1619,14 @@ static void on_cmd(const app_event_t *ev)
     }
 
     case CMD_IDENTIFY: {
-        /* blink three times, then put the light back as it was */
+        /* blink three times (one toggle per tick), then back as it was */
         light_t *il = lights_find_by_addr(ev->cmd.addr);
-        if (!il || s_state != CS_ONLINE) break;
+        if (!il || s_state != CS_ONLINE || s_ident.step) break;
         fade_stop();
-        bool was_on = il->state.on;
         ESP_LOGI(TAG, "identify 0x%04x", il->addr);
-        for (int i = 0; i < 3; i++) {
-            telink_onoff(!was_on, p);
-            send_telink(il->addr, p);
-            vTaskDelay(pdMS_TO_TICKS(350));
-            telink_onoff(was_on, p);
-            send_telink(il->addr, p);
-            vTaskDelay(pdMS_TO_TICKS(350));
-        }
-        schedule_refresh(il->addr);
+        s_ident.addr = il->addr;
+        s_ident.was_on = il->state.on;
+        s_ident.step = 6;
         break;
     }
 
@@ -1662,6 +1670,19 @@ static void on_tick(void)
     if (s_pair_dirty) {
         s_pair_dirty = false;
         ui_notify_pair_changed();
+    }
+
+    if (s_ident.step) {
+        if (s_state == CS_ONLINE) {
+            uint8_t p[10];
+            s_ident.step--;
+            bool on = (s_ident.step % 2) ? !s_ident.was_on : s_ident.was_on;
+            telink_onoff(on, p);
+            send_telink(s_ident.addr, p);
+            if (!s_ident.step) schedule_refresh(s_ident.addr);
+        } else {
+            s_ident.step = 0;
+        }
     }
 
     switch (s_state) {
