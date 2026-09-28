@@ -1,0 +1,5 @@
+[45/1687] Building C object esp-idf/esp-tls/CMakeFiles/__idf_esp-tls.dir/esp_tls_error_capture.c.obj
+[743/1687] Building C object esp-idf/mbedtls/mbedtls/library/CMakeFiles/mbedcrypto.dir/error.c.obj
+meshdeck.bin binary size 0x13e6b0 bytes. Smallest app partition is 0x600000 bytes. 0x4c1950 bytes (79%) free.
+Project build complete. To flash, run:
+BUILD EXIT=0

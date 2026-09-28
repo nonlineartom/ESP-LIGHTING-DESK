@@ -101,7 +101,6 @@ static uint32_t s_poll_ticks;
 static int      s_poll_index;
 static int      s_refresh_in;          /* ticks until a post-command status refresh */
 static uint16_t s_refresh_addr;
-static bool     s_online_setup_done;
 
 /* pairing */
 static pair_state_t s_pair_state = PAIR_IDLE;
