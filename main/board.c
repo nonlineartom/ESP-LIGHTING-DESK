@@ -227,7 +227,11 @@ esp_err_t board_init(void)
         },
     };
     lvgl_port_display_dsi_cfg_t dsi_cfg = { .flags.avoid_tearing = true };
+    /* The port applies rotation 0 with esp_lcd_panel_swap_xy(), which a DPI
+     * panel does not implement; keep that expected error out of the log. */
+    esp_log_level_set("lcd_panel", ESP_LOG_NONE);
     s_disp = lvgl_port_add_disp_dsi(&disp_cfg, &dsi_cfg);
+    esp_log_level_set("lcd_panel", ESP_LOG_INFO);
     if (!s_disp) {
         ESP_LOGE(TAG, "lvgl display add failed");
         return ESP_FAIL;

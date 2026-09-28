@@ -154,8 +154,8 @@ int main(void)
 
     /* 9-11. pairing */
     sim_set_pair(PAIR_SCANNING, "Looking for lights in pairing mode", 0);
-    sim_add_unprov("amaran P2c", -52);
-    sim_add_unprov("amaran 100x", -71);
+    sim_add_unprov("400I5-7C21A0", -52);
+    sim_add_unprov("40035-3E4B58", -71);
     ui_show_pair();
     run(700);
     snap("09_pair_scan");

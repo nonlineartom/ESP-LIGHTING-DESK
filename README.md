@@ -61,6 +61,7 @@ main/
   mesh_cfg.[ch]     configuration client messages
   telink.[ch]       Telink/Sidus 0x26 payloads
   lights.[ch]       light registry + preview colour
+  products.[ch]     Sidus product codes -> model name and capabilities
   store.[ch]        NVS persistence
   board.[ch]        display (JD9365 over MIPI-DSI), touch (GT911), backlight, LVGL port
   ui/               LVGL screens: home, pair, control
@@ -78,9 +79,17 @@ docs/               research notes, protocol summary, hardware test plan
 
 ## Building
 
-Requirements: ESP-IDF **v5.5.x** (the board vendor's supported line; v5.5.5
-was used here), Python 3, git.  The IDF Component Manager is disabled by the
-project — every dependency is in-tree.
+Requirements: ESP-IDF **v5.5.x** (the board vendor's supported line; built
+and run with v5.5.4 and v5.5.5), Python 3, git.  The IDF Component Manager
+is disabled by the project — every dependency is in-tree.
+
+**Chip revision.**  ESP-IDF builds for ESP32-P4 revisions below 3.0 and from
+3.0 on are mutually exclusive.  `sdkconfig.defaults` targets **rev v1.x**,
+which is what the test board has (`esptool.py chip_id` prints `revision
+v1.3`).  For a rev v3 board set `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=n`,
+`CONFIG_ESP32P4_REV_MIN_300=y` (and optionally `CONFIG_SPIRAM_SPEED_250M=y`),
+delete `sdkconfig` and rebuild.  An image for the wrong revision stops in
+the bootloader with a chip-revision error.
 
 ```bash
 git clone --recursive <this repo> meshdeck
@@ -94,7 +103,7 @@ idf.py -p /dev/cu.usbmodem* flash monitor      # USB-C "UART" port of the board
 Host tests and UI renders (no hardware needed):
 
 ```bash
-cd tests/host && make test               # protocol unit tests
+cd tests/host && make test               # protocol unit tests (gcc + OpenSSL; Homebrew's are found on macOS)
 cd tools/sim && make && ./render && python3 to_png.py   # writes out/*.png + contact sheets
 ```
 
@@ -103,14 +112,19 @@ cd tools/sim && make && ./render && python3 to_png.py   # writes out/*.png + con
 The P4 has no radio.  Bluetooth comes from the on-board ESP32-C6 running the
 **ESP-Hosted slave** firmware, connected over SDIO (P4 GPIO14–19, reset on
 GPIO54 — the ESP-Hosted defaults for the P4, confirmed against the Waveshare
-schematic).  Waveshare ships the C6 with an ESP-Hosted image, but the vendor
-does not document whether its Bluetooth controller is enabled.
+schematic).
 
-On boot MeshDeck logs the transport capabilities it negotiates with the C6.
-Look for a line like `transport: - HCI over SDIO` (or `BT` in the capability
-list).  If the log instead says the BT controller failed to initialise, flash
-the C6 with the ESP-Hosted slave firmware for `esp32c6` (its default config
-enables BLE over SDIO):
+**The C6 as shipped works.**  Waveshare's image reports ESP-Hosted version
+`0.0.0` and `HCI over SDIO / BLE only`, and its Bluetooth controller is
+already running.  It does not answer the newer controller RPCs
+(`Req_FeatureControl`), each of which costs a 5 s timeout; MeshDeck notices
+this on the first boot and skips them afterwards (NVS key `bt_rpc_skip`), so
+Bluetooth is up about 3.5 s after power-on.  If Bluetooth ever fails to come
+up with the RPCs skipped (e.g. the C6 was reflashed), the flag is cleared
+and the board restarts once.
+
+Updating the C6 is optional.  To do it, build the ESP-Hosted slave firmware
+for `esp32c6` (its default config enables BLE over SDIO):
 
 ```bash
 cd components/esp_hosted/slave
@@ -130,51 +144,58 @@ idf.py -p <c6-port> flash
    Link / amaran app network will not appear.  Remove it in the app (light
    settings → remove / unbind) or perform the light's factory reset.
 2. On MeshDeck tap **+**.  Lights in pairing mode show up within a few seconds
-   (name if advertised, first bytes of the device UUID, signal strength).
+   with their model (read from the Sidus device UUID, e.g. "amaran PT2c"),
+   the tail of their Bluetooth address ("ID DBFA30") and signal strength.
 3. Tap the light.  Progress: connect → provisioning (ECDH) → the light restarts
    → MeshDeck reconnects to it → composition → AppKey → model binding → done.
-4. The light appears on the home screen.  Tap it to control it.
+4. The light gets a page on the desk, named after its model ("amaran PT2c",
+   "amaran PT2c 2", ...), with only the controls the model supports.
 
-Remove a light with the bin icon on its control screen (sends Config Node
-Reset so it goes back to pairing mode).
+Remove a light from the system sheet (sends Config Node Reset so it goes
+back to pairing mode).  A light that was reset by hand while still in
+MeshDeck's list shows up for pairing again and reuses its slot.
 
-## Status and known unknowns
+## Status
 
-Everything compiles for the ESP32-P4 and the protocol core passes its host
-tests, but **this has not yet run on hardware**.  The first hardware session
-should check, in order (see `docs/HARDWARE_TEST_PLAN.md`):
+**Verified on hardware** (Waveshare ESP32-P4-WIFI6-Touch-LCD-4C, P4 rev
+v1.3, stock C6 image, amaran PT2c): display, touch, C6 over SDIO, NimBLE,
+scanning, standard PB-GATT provisioning (no Telink fast-provisioning
+needed), AppKey Add + model binding, `0x26` control with status read-back,
+and reconnecting through the stored network after a reboot.
 
-1. Display and touch come up (JD9365 init sequence and GT911 address probe
-   copied from the Waveshare BSP v3.0.1).
-2. The C6 answers over SDIO and the NimBLE host syncs (`ble: host synced`).
-3. An unprovisioned light is seen (`core: unprovisioned device: ...`).
-4. Provisioning completes and the light comes back advertising Node Identity.
-5. AppKey Add / binds get status responses and a `0x26` status report arrives.
-
-Risks called out in `docs/RESEARCH.md`: the Sidus firmware might require the
-Telink "fast provisioning" flow instead of standard PB-GATT (the app supports
-both; standard is expected), the exact model that must hold the AppKey is
-unknown (we bind all of them), and the C6 factory image may lack Bluetooth.
+**Implemented, awaiting a hardware pass** (see `docs/HARDWARE_TEST_PLAN.md`):
+built-in effects, battery reports, scene crossfades, identify, a second
+light relayed through the mesh, and the pages for bi-colour fixtures.  The
+effect and battery encodings are byte-identical to amaran-hacs, which
+validated them on T4c and Ace 25c fixtures.
 
 ## Using the desk
 
 * **Swipe left / right** between the Master page and each light.  Drag the
   right-hand vertical bar for intensity (on Master it scales every channel).
-  Tap the centre disc for power.  CCT has temperature and G/M sliders; HSI
-  has a colour wheel and a left-hand saturation bar.
+  Tap the centre disc for power.
+* Mode chips show what the fixture can do: **CCT** (temperature, plus G/M on
+  fixtures that have it; the range is the model's), **HSI** (colour wheel and
+  left-hand saturation bar) and **FX** (a row of the model's built-in
+  effects: tap to start, tap the running one to stop; the level bar still
+  sets its intensity and the disc pulses while it runs).
+* Battery fixtures show their charge in the disc (polled every minute).
 * **Two finger swipe up** or tap **Scenes** to open the drawer: tap to recall,
-  long-press to overwrite with the
-  current look, bin to delete, "+" to save the current look.  The **Fade**
-  row sets the crossfade (Snap / 1 s / 2 s / 5 s); fades are stepped from the
-  controller within a configurable mesh message budget.
+  long-press to overwrite with the current look, bin to delete, "+" to save
+  the current look.  Scenes store effects too.  The **Fade** row sets the
+  crossfade (Snap / 1 s / 2 s / 5 s); fades are stepped from the controller
+  within a configurable mesh message budget, effects switch at the start.
 * **Two finger swipe down** or tap link status for the system sheet: pair a
-  light, rename the
-  current light (cycles studio names), remove it, factory reset.
+  light; for the current light its model, ID, range and battery, **Rename**
+  (keyboard + studio-name chips; long-pressing the light's name on its page
+  does the same), **Identify** (blinks it three times), **Remove**; factory
+  reset.
 
 ## Roadmap
 
-* **Phase 2 (remaining)** — effects (the opcodes are documented in the
-  amaran-hacs project), groups, free-text naming, fade times.
+* **Phase 2 (remaining)** — groups; second / third generation effects for
+  pro fixtures once validated on hardware; native RGB for the fixtures that
+  have it.
 * **Phase 3** — Wi-Fi: join existing infrastructure through the C6
   (`esp_wifi_remote` is already in the tree), remote / web control, optional
   import of an existing Sidus network from an amaran Desktop export instead

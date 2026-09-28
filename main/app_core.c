@@ -142,6 +142,7 @@ static uint16_t s_target_addr;         /* light we want to connect to (0 = any) 
 static uint32_t s_state_ticks;
 static uint32_t s_poll_ticks;
 static uint32_t s_batt_ticks;
+static uint32_t s_last_rx_ms;          /* last mesh message from any light */
 static int      s_batt_index;
 static int      s_poll_index;
 static int      s_refresh_in;          /* ticks until a post-command status refresh */
@@ -238,7 +239,10 @@ static void set_pair(pair_state_t st, const char *text, int pct)
 static void set_state(core_state_t st)
 {
     if (st != s_state) ESP_LOGI(TAG, "state %d -> %d", s_state, st);
-    if (st == CS_ONLINE && s_state != CS_ONLINE) s_batt_ticks = BATTERY_POLL_TICKS - 5;  /* battery ~2 s after connect */
+    if (st == CS_ONLINE && s_state != CS_ONLINE) {
+        s_batt_ticks = BATTERY_POLL_TICKS - 5;   /* battery ~2 s after connect */
+        s_last_rx_ms = now_ms();
+    }
     s_state = st;
     s_state_ticks = 0;
     ui_notify_link_changed();
@@ -360,6 +364,7 @@ static void net_access_rx(void *ctx, uint16_t src, uint16_t dst, bool devkey,
     uint32_t opcode;
     size_t oplen = mesh_access_opcode(access, len, &opcode);
     if (!oplen) return;
+    s_last_rx_ms = now_ms();
 
     if (opcode == TELINK_OPCODE && !devkey) {
         if (len < 1 + TELINK_PAYLOAD_LEN) return;
@@ -1663,7 +1668,18 @@ static void on_tick(void)
             ble_central_disconnect();
         }
         break;
-    case CS_ONLINE:
+    case CS_ONLINE: {
+        /* Link watchdog: status polls rotate through the lights every 8 s, so
+         * some light answers well within this unless the proxy link is dead
+         * without a disconnect event (seen with BLE supervision hiccups). */
+        uint32_t quiet_limit = 30000 + (uint32_t)lights_count() * STATUS_POLL_TICKS * TICK_MS * 2;
+        if (lights_count() && now_ms() - s_last_rx_ms > quiet_limit) {
+            ESP_LOGW(TAG, "no mesh traffic for %lus; reconnecting", (unsigned long)(quiet_limit / 1000));
+            s_last_rx_ms = now_ms();
+            ble_central_disconnect();          /* DISCONNECTED -> rescan */
+            break;
+        }
+        }
         if (s_fade.active) break;              /* no polling mid-fade */
         if (++s_batt_ticks >= BATTERY_POLL_TICKS) {
             s_batt_ticks = 0;

@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "app_core.h"
+#include "products.h"
 #include "scenes.h"
 #include "ui.h"
 
@@ -33,14 +34,17 @@ void sim_set_pair(pair_state_t st, const char *text, int pct)
     snprintf(s_pair_text, sizeof(s_pair_text), "%s", text);
     s_pair_pct = pct;
 }
-void sim_add_unprov(const char *name, int rssi)
+/* uuid_ascii: a Sidus device UUID ("400H5-DBFA30"); the name shown is the
+ * product name, as app_core does. */
+void sim_add_unprov(const char *uuid_ascii, int rssi)
 {
     if (s_unprov_n >= UNPROV_MAX) return;
     unprov_dev_t *d = &s_unprov[s_unprov_n++];
     memset(d, 0, sizeof(*d));
-    for (int i = 0; i < 16; i++) d->uuid[i] = (uint8_t)(0x30 + s_unprov_n * 7 + i * 13);
+    memcpy(d->uuid, uuid_ascii, strlen(uuid_ascii) < 16 ? strlen(uuid_ascii) : 16);
     d->rssi = (int8_t)rssi;
-    snprintf(d->name, sizeof(d->name), "%s", name);
+    const char *product = sidus_product_from_uuid(d->uuid);
+    snprintf(d->name, sizeof(d->name), "%s", product ? product : "");
 }
 void sim_clear_unprov(void) { s_unprov_n = 0; }
 

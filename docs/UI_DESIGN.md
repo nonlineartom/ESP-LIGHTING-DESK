@@ -54,10 +54,19 @@ targets, no precision taps, no menus that need reading.
 * Page *n* is one **channel** (a paired light):
   * right-hand vertical fader: intensity;
   * centre: preview disc with a large intensity value; a straight name above;
-  * below the disc: mode chips **CCT / HSI**;
-  * CCT: two labelled slider cards for temperature and G/M;
+  * below the disc: mode chips **CCT / HSI / FX**, only those the fixture
+    supports (from its Sidus product code), centred as a group;
+  * CCT: two labelled slider cards for temperature (the model's range) and
+    G/M; a fixture without G/M gets one centred TEMP card;
   * HSI: interactive colour wheel around the preview and left-hand vertical
     saturation fader;
+  * FX: a horizontally scrolling row of the model's built-in effects (tap to
+    start, tap the running one to stop).  Tapping the chip only reveals the
+    row; nothing is sent until an effect is picked.  While an effect runs
+    the disc's glow pulses and its second line names the effect;
+  * battery fixtures: a third line in the disc with the charge (red at 15 %
+    or less, a charge symbol on external power);
+  * long-press the name to rename the light;
   * bottom: Scenes button and position dots.
 * A channel page that has no fixture yet (not paired) does not exist; the
   "+" to pair lives in the system sheet and on the Master page when empty.
@@ -74,14 +83,18 @@ targets, no precision taps, no menus that need reading.
   mesh budget of `FADE_MSGS_PER_SEC` messages per second shared by all lights.  **Long-press** overwrites the scene
   with the current look.  The bin button deletes after confirmation.
   **+** at the bottom saves the current look as a new scene (name is
-  auto-numbered; rename in a later phase).
+  auto-numbered).  Effects are part of a look: recall switches them at the
+  first fade step instead of interpolating.
 
 ### System sheet
 
-Drops from the top: link state with the proxy light's name, **Pair a light**
-(opens the existing pairing flow), per-light rename / remove for the active
-channel, factory reset (with confirm).  Two finger swipe up or tap the handle
-to close.
+Drops from the top over a 60 % black scrim (tap the scrim to close): link
+state with the proxy light's name, **Pair a light** (opens the pairing
+flow), then for the active channel a fixture card (name; model and Bluetooth
+ID; CCT range, colour / effects, battery), **Rename** (full-screen keyboard
+with studio-name chips), **Identify** (the light blinks three times) and
+**Remove**, and factory reset (with confirm).  Two finger swipe up, tap the
+handle or the scrim to close.
 
 ## Gesture map
 
@@ -97,7 +110,10 @@ to close.
 | Drag colour wheel | HSI channel | hue |
 | Drag a lower slider | CCT channel | temperature or G/M |
 | Tap centre disc | channel / master | power toggle (disc "breathes") |
-| Tap chip | channel | switch CCT / HSI (controls cross-fade) |
+| Tap chip | channel | switch CCT / HSI (controls cross-fade); FX reveals the effect row |
+| Tap effect | FX channel | start it; tap the running one to stop |
+| Long-press light name | channel | rename |
+| Tap scrim | system sheet | close |
 | Tap scene | drawer | recall |
 | Long-press scene | drawer | overwrite with current look |
 
@@ -136,6 +152,7 @@ the P4 with RGB565.
 ## Scenes data model
 
 `scene_t { used, name[16], entries[LIGHTS_MAX] { addr, on, mode, intensity,
-cct, gm, hue, sat } }`, up to 12 scenes, persisted in NVS as one blob.
+cct, gm, hue, sat } }`, up to 12 scenes, persisted in NVS as one blob with a
+version header.  `mode` 2 = effect, with the effect id in `hue`.
 Recall sends one `0x26` message per light per attribute (mode command
 carries intensity; power separately), 60 ms apart, then a status refresh.
