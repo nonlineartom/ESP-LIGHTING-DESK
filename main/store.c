@@ -146,6 +146,7 @@ int store_load_lights(void)
         l->cct_max = recs[i].cct_max ? recs[i].cct_max : 7500;
         l->has_hsi = recs[i].has_hsi;
         l->has_gm = recs[i].has_gm;
+        lights_apply_product_caps(l);    /* the product table wins when known */
     }
     ESP_LOGI(TAG, "loaded %d light(s)", n);
     return n;

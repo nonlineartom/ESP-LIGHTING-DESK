@@ -63,6 +63,7 @@ void      ui_anim_opa(lv_obj_t *obj, lv_opa_t to, uint32_t ms);
 void      ui_breathe(lv_obj_t *obj);        /* quick scale pulse */
 void      ui_fade_bg(lv_obj_t *obj, lv_color_t to, uint32_t ms);
 void      ui_fade_shadow(lv_obj_t *obj, lv_color_t to, uint32_t ms);
+void      ui_pulse(lv_obj_t *obj, bool on);   /* looping glow (effect running) */
 
 /* ---- screen modules -------------------------------------------------------- */
 void     ui_desk_create(lv_obj_t *screen);
@@ -82,6 +83,7 @@ void ui_system_create(lv_obj_t *screen);
 void ui_system_refresh(void);
 void ui_system_set_open(bool open, bool animate);
 bool ui_system_is_open(void);
+void ui_system_show_rename(void);         /* keyboard rename of the current light */
 
 void ui_pair_refresh(void);
 

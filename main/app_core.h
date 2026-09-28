@@ -78,6 +78,11 @@ void app_cmd_rename_light(uint16_t addr, const char *name);
 void app_cmd_master_level(uint16_t level_0_1000);      /* grand master, scales every channel */
 void app_cmd_all_power(bool on);
 void app_cmd_all_cct(uint16_t kelvin);                 /* every light to CCT mode at this temperature */
+/* Start built-in effect fx (0..TELINK_FX_COUNT-1) at the light's level, or
+ * stop the running effect (TELINK_FX_NONE) and restore its CCT / HSI look. */
+void app_cmd_set_effect(uint16_t addr, uint8_t fx);
+/* Blink a light three times so it can be found in the rig. */
+void app_cmd_identify(uint16_t addr);
 uint16_t app_core_master_level(void);
 
 /* scenes */

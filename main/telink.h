@@ -25,6 +25,14 @@ extern "C" {
 #define TELINK_CMD_CCT         0x82
 #define TELINK_CMD_ONOFF       0x8c
 #define TELINK_CMD_INTENSITY   0x8f
+#define TELINK_CMD_EFFECT      0x87   /* first-generation system effects */
+#define TELINK_CMD_POWER_REQ   0x0a   /* power source / battery query */
+
+/* First-generation system effects (command 0x87), ids 0..14.  Encodings from
+ * neyako/amaran-hacs; confirmed on hardware (T4c, Ace 25c) by device reports.
+ * Only intensity is adjustable; speed / colour are fixed presets. */
+#define TELINK_FX_COUNT        15
+#define TELINK_FX_NONE         0xff
 
 /* Builders — all write exactly TELINK_PAYLOAD_LEN bytes to out. */
 void telink_status_request(uint8_t out[10]);
@@ -32,6 +40,11 @@ void telink_onoff(bool on, uint8_t out[10]);
 void telink_intensity(uint16_t intensity_0_1000, uint8_t out[10]);
 void telink_cct(uint16_t kelvin, uint16_t intensity_0_1000, int gm_minus10_plus10, uint8_t out[10]);
 void telink_hsi(uint16_t hue_0_360, uint8_t sat_0_100, uint16_t intensity_0_1000, uint8_t out[10]);
+
+void telink_effect(uint8_t fx_id, uint16_t intensity_0_1000, uint8_t out[10]);
+void telink_effect_stop(uint8_t out[10]);
+void telink_power_request(uint8_t out[10]);
+const char *telink_effect_name(uint8_t fx_id);   /* "Fire", or "" */
 
 typedef struct {
     bool     on;
@@ -47,6 +60,25 @@ typedef struct {
 /* Decode a 10-byte status report.  Returns false for bad checksum or a
  * non-light-state page (e.g. 0x0a power diagnostics). */
 bool telink_decode_status(const uint8_t p[10], telink_status_t *out);
+
+typedef struct {
+    uint8_t  fx_id;         /* 0..14, or TELINK_FX_NONE when effects are off */
+    bool     on;
+    uint16_t intensity;     /* 0..1000 */
+} telink_effect_status_t;
+
+/* First-generation effect report (type 0x07). */
+bool telink_decode_effect(const uint8_t p[10], telink_effect_status_t *out);
+
+typedef struct {
+    uint8_t  battery_pct;       /* 0..100 */
+    uint16_t battery_minutes;   /* meaning unverified (runtime estimate?) */
+    uint16_t battery_mv;
+    uint16_t external_mv;       /* > 0: running from external power */
+} telink_power_t;
+
+/* Power / battery report (type 0x0a). */
+bool telink_decode_power(const uint8_t p[10], telink_power_t *out);
 
 #ifdef __cplusplus
 }

@@ -33,6 +33,7 @@ static const char *TAG = "core";
 #define SEQ_RESERVE_LOW     128
 #define SEQ_BOOT_MARGIN     64      /* covers records written by older firmware */
 #define STATUS_POLL_TICKS   20      /* 8 s */
+#define BATTERY_POLL_TICKS  150     /* 60 s, battery fixtures only */
 #define PROXY_SCAN_TIMEOUT  75      /* 30 s before we restart the scan */
 #define CFG_TIMEOUT_TICKS   8       /* ~3 s per config request */
 #define CFG_RETRIES         3
@@ -58,7 +59,7 @@ typedef enum {
     CMD_REMOVE, CMD_FACTORY_RESET, CMD_RENAME,
     CMD_MASTER, CMD_ALL_POWER, CMD_ALL_CCT,
     CMD_SCENE_SAVE, CMD_SCENE_RECALL, CMD_SCENE_DELETE,
-    CMD_SET_FADE, CMD_DIAG_LIGHTNESS,
+    CMD_SET_FADE, CMD_DIAG_LIGHTNESS, CMD_FX, CMD_IDENTIFY,
 } cmd_type_t;
 
 typedef struct {
@@ -118,7 +119,8 @@ static esp_timer_handle_t s_fade_timer;
 typedef struct {
     uint16_t addr;
     bool     on0, on1;
-    uint8_t  mode1;
+    uint8_t  mode0, mode1;
+    uint8_t  fx1;             /* effect id when mode1 is LIGHT_MODE_FX */
     uint16_t lvl0, lvl1;      /* effective levels (0 when off) */
     uint16_t cct0, cct1;
     int8_t   gm0, gm1;
@@ -139,6 +141,8 @@ static uint16_t s_proxy_addr;          /* light we are connected through */
 static uint16_t s_target_addr;         /* light we want to connect to (0 = any) */
 static uint32_t s_state_ticks;
 static uint32_t s_poll_ticks;
+static uint32_t s_batt_ticks;
+static int      s_batt_index;
 static int      s_poll_index;
 static int      s_refresh_in;          /* ticks until a post-command status refresh */
 static uint16_t s_refresh_addr;
@@ -234,6 +238,7 @@ static void set_pair(pair_state_t st, const char *text, int pct)
 static void set_state(core_state_t st)
 {
     if (st != s_state) ESP_LOGI(TAG, "state %d -> %d", s_state, st);
+    if (st == CS_ONLINE && s_state != CS_ONLINE) s_batt_ticks = BATTERY_POLL_TICKS - 5;  /* battery ~2 s after connect */
     s_state = st;
     s_state_ticks = 0;
     ui_notify_link_changed();
@@ -299,6 +304,8 @@ void app_cmd_factory_reset(void)                     { post_cmd(CMD_FACTORY_RESE
 void app_cmd_master_level(uint16_t level)            { post_cmd(CMD_MASTER, 0, level, 0, 0, false, NULL); }
 void app_cmd_all_power(bool on)                      { post_cmd(CMD_ALL_POWER, 0, 0, 0, 0, on, NULL); }
 void app_cmd_all_cct(uint16_t kelvin)                { post_cmd(CMD_ALL_CCT, 0, kelvin, 0, 0, false, NULL); }
+void app_cmd_set_effect(uint16_t addr, uint8_t fx)   { post_cmd(CMD_FX, addr, fx, 0, 0, false, NULL); }
+void app_cmd_identify(uint16_t addr)                 { post_cmd(CMD_IDENTIFY, addr, 0, 0, 0, false, NULL); }
 void app_cmd_scene_save(int idx)                     { post_cmd(CMD_SCENE_SAVE, 0, 0, 0, idx, false, NULL); }
 void app_cmd_scene_recall(int idx)                   { post_cmd(CMD_SCENE_RECALL, 0, 0, 0, idx, false, NULL); }
 void app_cmd_scene_delete(int idx)                   { post_cmd(CMD_SCENE_DELETE, 0, 0, 0, idx, false, NULL); }
@@ -357,8 +364,49 @@ static void net_access_rx(void *ctx, uint16_t src, uint16_t dst, bool devkey,
     if (opcode == TELINK_OPCODE && !devkey) {
         if (len < 1 + TELINK_PAYLOAD_LEN) return;
         telink_status_t st;
+        telink_effect_status_t fx;
+        telink_power_t pw;
+        if (telink_decode_effect(access + 1, &fx)) {
+            app_core_lock();
+            light_t *l = lights_find_by_addr(src);
+            if (l) {
+                l->state.on = fx.on;
+                if (fx.fx_id != TELINK_FX_NONE) {
+                    if (l->state.mode != LIGHT_MODE_FX) l->state.base_mode = (uint8_t)l->state.mode;
+                    l->state.mode = LIGHT_MODE_FX;
+                    l->state.fx = fx.fx_id;
+                    l->state.intensity = fx.intensity;
+                } else if (l->state.mode == LIGHT_MODE_FX) {
+                    l->state.mode = (light_mode_t)l->state.base_mode;
+                    l->state.fx = TELINK_FX_NONE;
+                }
+                l->state.reported = true;
+                l->state.last_report_ms = now_ms();
+            }
+            app_core_unlock();
+            ESP_LOGI(TAG, "status 0x%04x: effect %s (%u) %s int=%u", src,
+                     fx.fx_id == TELINK_FX_NONE ? "off" : telink_effect_name(fx.fx_id), fx.fx_id,
+                     fx.on ? "on" : "off", fx.intensity);
+            if (l) ui_notify_light_state(l->addr);
+            return;
+        }
+        if (telink_decode_power(access + 1, &pw)) {
+            app_core_lock();
+            light_t *l = lights_find_by_addr(src);
+            bool ext = pw.external_mv > 0;
+            if (l && !(ext && pw.battery_pct == 0)) {   /* 0 % on external power = no battery info */
+                l->state.batt_pct = (int8_t)pw.battery_pct;
+                l->state.ext_power = ext;
+                l->state.batt_ms = now_ms();
+            }
+            app_core_unlock();
+            ESP_LOGI(TAG, "power 0x%04x: battery %u%% %umV, external %umV, %u min", src, pw.battery_pct,
+                     pw.battery_mv, pw.external_mv, pw.battery_minutes);
+            if (l) ui_notify_light_state(l->addr);
+            return;
+        }
         if (!telink_decode_status(access + 1, &st)) {
-            ESP_LOGD(TAG, "telink non-state page 0x%02x from 0x%04x", access[10] & 0x7f, src);
+            ESP_LOGD(TAG, "telink page 0x%02x from 0x%04x not decoded", access[10] & 0x7f, src);
             return;
         }
         app_core_lock();
@@ -978,13 +1026,82 @@ static uint16_t scaled(uint16_t level)
     return v > 1000 ? 1000 : (uint16_t)v;
 }
 
+static uint16_t clamp_cct(const light_t *l, uint16_t k)
+{
+    if (k < l->cct_min) k = l->cct_min;
+    if (k > l->cct_max) k = l->cct_max;
+    return k;
+}
+
+/* Stop a running effect before a plain colour command.  The caller sends the
+ * new look right after (amaran-hacs does the same: stop, then re-send). */
+static void fx_stop_if_running(light_t *l)
+{
+    if (l->state.mode != LIGHT_MODE_FX) return;
+    uint8_t p[10];
+    telink_effect_stop(p);
+    send_telink(l->addr, p);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    app_core_lock();
+    l->state.mode = (light_mode_t)l->state.base_mode;
+    l->state.fx = TELINK_FX_NONE;
+    app_core_unlock();
+}
+
+/* Start (or re-level) effect fx at the given channel level. */
+static void send_fx(light_t *l, uint8_t fx, uint16_t level)
+{
+    uint8_t p[10];
+    if (!l->state.on) {                  /* effects do not wake a sleeping light */
+        telink_onoff(true, p);
+        send_telink(l->addr, p);
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    uint16_t out = scaled(level);
+    telink_effect(fx, out, p);
+    send_telink(l->addr, p);
+    app_core_lock();
+    if (l->state.mode != LIGHT_MODE_FX) l->state.base_mode = (uint8_t)l->state.mode;
+    l->state.mode = LIGHT_MODE_FX;
+    l->state.fx = fx;
+    l->state.on = true;
+    l->state.level = level;
+    l->state.intensity = out;
+    app_core_unlock();
+    ui_notify_light_state(l->addr);
+}
+
+/* Re-send the light's CCT / HSI look at its current level (after an effect). */
+static void send_base_look(light_t *l)
+{
+    uint8_t p[10];
+    uint16_t out = scaled(l->state.level);
+    if (l->state.mode == LIGHT_MODE_HSI) telink_hsi(l->state.hue, l->state.sat, out, p);
+    else telink_cct(clamp_cct(l, l->state.cct), out, l->has_gm ? l->state.gm : 0, p);
+    send_telink(l->addr, p);
+}
+
 /* Send a light's whole look (mode + level + power).  Used by scenes and the
- * desk-wide commands.  Spaced so the proxy and the mesh keep up. */
+ * desk-wide commands.  Spaced so the proxy and the mesh keep up.  For
+ * LIGHT_MODE_FX, hue carries the effect id. */
 static void send_look(light_t *l, bool on, light_mode_t mode, uint16_t level,
                       uint16_t cct, int gm, uint16_t hue, uint8_t sat)
 {
     uint8_t p[10];
     uint16_t out = scaled(level);
+    if (mode == LIGHT_MODE_FX) {
+        if (hue < TELINK_FX_COUNT && (l->fx_mask & (1u << hue)) && on) {
+            send_fx(l, (uint8_t)hue, level);
+            vTaskDelay(pdMS_TO_TICKS(60));
+            return;
+        }
+        mode = (light_mode_t)l->state.base_mode;   /* effect not available: keep the colour */
+        hue = l->state.hue; sat = l->state.sat; cct = l->state.cct; gm = l->state.gm;
+    }
+    if (mode == LIGHT_MODE_HSI && !l->has_hsi) mode = LIGHT_MODE_CCT;
+    fx_stop_if_running(l);
+    cct = clamp_cct(l, cct);
+    if (!l->has_gm) gm = 0;
     if (mode == LIGHT_MODE_HSI) telink_hsi(hue, sat, out, p);
     else                        telink_cct(cct, out, gm, p);
     send_telink(l->addr, p);
@@ -1011,7 +1128,8 @@ static void apply_master(void)
         if (!l->used) continue;
         uint8_t p[10];
         uint16_t out = scaled(l->state.level);
-        telink_intensity(out, p);
+        if (l->state.mode == LIGHT_MODE_FX) telink_effect(l->state.fx, out, p);
+        else                                telink_intensity(out, p);
         send_telink(l->addr, p);
         app_core_lock();
         l->state.intensity = out;
@@ -1071,6 +1189,24 @@ static void fade_step(void)
         light_mode_t mode = (light_mode_t)f->mode1;
         uint8_t p[10];
 
+        if (mode == LIGHT_MODE_FX) {             /* effects switch, they do not fade */
+            if (st == 1) {
+                if (f->on1) send_fx(l, f->fx1, f->lvl1);
+                else {
+                    telink_onoff(false, p);
+                    send_telink(f->addr, p);
+                    app_core_lock();
+                    l->state.on = false;
+                    app_core_unlock();
+                    ui_notify_light_state(f->addr);
+                }
+                vTaskDelay(pdMS_TO_TICKS(15));
+            }
+            continue;
+        }
+        if (st == 1 && f->mode0 == LIGHT_MODE_FX) {
+            fx_stop_if_running(l);
+        }
         if (st == 1 && !f->on0 && f->on1) {      /* wake first, from black */
             telink_onoff(true, p);
             send_telink(f->addr, p);
@@ -1136,16 +1272,26 @@ static void recall_scene(int idx)
         fade_light_t *f = &s_fade.l[s_fade.count++];
         f->addr = e->addr;
         f->on0 = l->state.on;      f->on1 = e->on;
+        f->mode0 = (uint8_t)l->state.mode;
         f->mode1 = e->mode;
+        if (e->mode == LIGHT_MODE_FX) {
+            if (e->hue < TELINK_FX_COUNT && (l->fx_mask & (1u << e->hue))) {
+                f->fx1 = (uint8_t)e->hue;
+            } else {
+                f->mode1 = l->state.mode == LIGHT_MODE_FX ? l->state.base_mode : (uint8_t)l->state.mode;
+            }
+        } else if (e->mode == LIGHT_MODE_HSI && !l->has_hsi) {
+            f->mode1 = LIGHT_MODE_CCT;
+        }
         f->lvl0 = l->state.on ? l->state.level : 0;
         f->lvl1 = e->on ? e->intensity : 0;
         f->cct0 = l->state.cct;    f->cct1 = e->cct ? e->cct : l->state.cct;
         f->gm0 = l->state.gm;      f->gm1 = e->gm;
-        f->hue0 = l->state.hue;    f->hue1 = e->hue;
+        f->hue0 = l->state.hue;    f->hue1 = e->mode == LIGHT_MODE_FX ? l->state.hue : e->hue;
         f->sat0 = l->state.sat;    f->sat1 = e->sat;
         /* when the mode changes there is nothing sensible to fade the new
          * mode's colour from, so start it at its target */
-        if ((light_mode_t)e->mode != l->state.mode) {
+        if (f->mode1 != (uint8_t)l->state.mode) {
             f->cct0 = f->cct1; f->gm0 = f->gm1; f->hue0 = f->hue1; f->sat0 = f->sat1;
         }
     }
@@ -1237,27 +1383,41 @@ static void on_cmd(const app_event_t *ev)
         schedule_refresh(ev->cmd.addr);
         break;
 
-    case CMD_INTENSITY:
+    case CMD_INTENSITY: {
         fade_stop();
+        light_t *fl = lights_find_by_addr(ev->cmd.addr);
+        if (fl && fl->state.mode == LIGHT_MODE_FX) {   /* effects carry their own level */
+            send_fx(fl, fl->state.fx, ev->cmd.a);
+            schedule_refresh(ev->cmd.addr);
+            break;
+        }
         telink_intensity(scaled(ev->cmd.a), p);
         send_telink(ev->cmd.addr, p);
         st.command_type = TELINK_CMD_INTENSITY; st.intensity = scaled(ev->cmd.a);
         optimistic_update(ev->cmd.addr, &st, false);
         schedule_refresh(ev->cmd.addr);
         break;
+    }
 
-    case CMD_CCT:
+    case CMD_CCT: {
         fade_stop();
-        telink_cct(ev->cmd.a, scaled(ev->cmd.b), ev->cmd.c, p);
+        light_t *cl = lights_find_by_addr(ev->cmd.addr);
+        uint16_t k = cl ? clamp_cct(cl, ev->cmd.a) : ev->cmd.a;
+        int gm = (cl && !cl->has_gm) ? 0 : ev->cmd.c;
+        if (cl) fx_stop_if_running(cl);
+        telink_cct(k, scaled(ev->cmd.b), gm, p);
         send_telink(ev->cmd.addr, p);
-        st.command_type = TELINK_CMD_CCT; st.is_hsi = false; st.cct_kelvin = ev->cmd.a;
-        st.intensity = scaled(ev->cmd.b); st.gm = (int8_t)ev->cmd.c;
+        st.command_type = TELINK_CMD_CCT; st.is_hsi = false; st.cct_kelvin = k;
+        st.intensity = scaled(ev->cmd.b); st.gm = (int8_t)gm;
         optimistic_update(ev->cmd.addr, &st, true);
         schedule_refresh(ev->cmd.addr);
         break;
+    }
 
-    case CMD_HSI:
+    case CMD_HSI: {
         fade_stop();
+        light_t *hl = lights_find_by_addr(ev->cmd.addr);
+        if (hl) fx_stop_if_running(hl);
         telink_hsi(ev->cmd.a, (uint8_t)ev->cmd.c, scaled(ev->cmd.b), p);
         send_telink(ev->cmd.addr, p);
         st.command_type = TELINK_CMD_HSI; st.is_hsi = true; st.hue = ev->cmd.a;
@@ -1265,6 +1425,33 @@ static void on_cmd(const app_event_t *ev)
         optimistic_update(ev->cmd.addr, &st, true);
         schedule_refresh(ev->cmd.addr);
         break;
+    }
+
+    case CMD_FX: {
+        fade_stop();
+        s_last_scene = -1;
+        light_t *xl = lights_find_by_addr(ev->cmd.addr);
+        if (!xl) break;
+        uint8_t fx = (uint8_t)ev->cmd.a;
+        if (fx < TELINK_FX_COUNT && (xl->fx_mask & (1u << fx))) {
+            ESP_LOGI(TAG, "effect %s on 0x%04x", telink_effect_name(fx), xl->addr);
+            send_fx(xl, fx, xl->state.level);
+        } else if (xl->state.mode == LIGHT_MODE_FX) {
+            ESP_LOGI(TAG, "effect off on 0x%04x", xl->addr);
+            if (xl->state.on) {
+                fx_stop_if_running(xl);
+                send_base_look(xl);
+            } else {
+                app_core_lock();
+                xl->state.mode = (light_mode_t)xl->state.base_mode;
+                xl->state.fx = TELINK_FX_NONE;
+                app_core_unlock();
+            }
+            ui_notify_light_state(xl->addr);
+        }
+        schedule_refresh(ev->cmd.addr);
+        break;
+    }
 
     case CMD_STATUS:
         send_status_request(ev->cmd.addr);
@@ -1334,9 +1521,8 @@ static void on_cmd(const app_event_t *ev)
         for (int i = 0; i < LIGHTS_MAX; i++) {
             light_t *l = &g_lights[i];
             if (!l->used) continue;
-            uint16_t k = ev->cmd.a;
-            if (k < l->cct_min) k = l->cct_min;
-            if (k > l->cct_max) k = l->cct_max;
+            uint16_t k = clamp_cct(l, ev->cmd.a);
+            fx_stop_if_running(l);
             telink_cct(k, scaled(l->state.level), 0, p);
             send_telink(l->addr, p);
             app_core_lock();
@@ -1385,6 +1571,25 @@ static void on_cmd(const app_event_t *ev)
         ESP_LOGW(TAG, "DIAG Light Lightness Set -> 0x%04x lightness=%u transition=0x%02x rc=%d "
                  "(watch whether the fixture dims smoothly)", ev->cmd.addr, ev->cmd.a, (unsigned)ev->cmd.b, rc);
         maybe_save_seq();
+        break;
+    }
+
+    case CMD_IDENTIFY: {
+        /* blink three times, then put the light back as it was */
+        light_t *il = lights_find_by_addr(ev->cmd.addr);
+        if (!il || s_state != CS_ONLINE) break;
+        fade_stop();
+        bool was_on = il->state.on;
+        ESP_LOGI(TAG, "identify 0x%04x", il->addr);
+        for (int i = 0; i < 3; i++) {
+            telink_onoff(!was_on, p);
+            send_telink(il->addr, p);
+            vTaskDelay(pdMS_TO_TICKS(350));
+            telink_onoff(was_on, p);
+            send_telink(il->addr, p);
+            vTaskDelay(pdMS_TO_TICKS(350));
+        }
+        schedule_refresh(il->addr);
         break;
     }
 
@@ -1460,6 +1665,22 @@ static void on_tick(void)
         break;
     case CS_ONLINE:
         if (s_fade.active) break;              /* no polling mid-fade */
+        if (++s_batt_ticks >= BATTERY_POLL_TICKS) {
+            s_batt_ticks = 0;
+            int seen = 0, nb = 0;
+            for (int i = 0; i < LIGHTS_MAX; i++) if (g_lights[i].used && g_lights[i].has_battery) nb++;
+            for (int i = 0; nb && i < LIGHTS_MAX; i++) {
+                if (!g_lights[i].used || !g_lights[i].has_battery) continue;
+                if (seen++ == s_batt_index % nb) {
+                    uint8_t pr[10];
+                    telink_power_request(pr);
+                    send_telink(g_lights[i].addr, pr);
+                    break;
+                }
+            }
+            s_batt_index++;
+            break;
+        }
         if (s_refresh_in > 0 && --s_refresh_in == 0) {
             send_status_request(s_refresh_addr);
         }

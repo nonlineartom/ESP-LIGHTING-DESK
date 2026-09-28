@@ -65,7 +65,7 @@ int scenes_capture(int idx, const char *name)
         e->intensity = l->state.intensity;
         e->cct = l->state.cct;
         e->gm = l->state.gm;
-        e->hue = l->state.hue;
+        e->hue = l->state.mode == LIGHT_MODE_FX ? l->state.fx : l->state.hue;   /* FX: effect id */
         e->sat = l->state.sat;
     }
     return idx;

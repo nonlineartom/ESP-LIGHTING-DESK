@@ -100,6 +100,20 @@ void app_cmd_set_hsi(uint16_t addr, uint16_t h, uint8_t s, uint16_t v)
     if (l) { l->state.mode = LIGHT_MODE_HSI; l->state.hue = h; l->state.sat = s; l->state.level = v;
              l->state.intensity = scaled(v); ui_notify_light_state(addr); }
 }
+void app_cmd_identify(uint16_t addr) { printf("[cmd] identify 0x%04x\n", addr); }
+void app_cmd_set_effect(uint16_t addr, uint8_t fx)
+{
+    printf("[cmd] effect 0x%04x %u\n", addr, fx);
+    light_t *l = lights_find_by_addr(addr);
+    if (!l) return;
+    if (fx < TELINK_FX_COUNT) {
+        if (l->state.mode != LIGHT_MODE_FX) l->state.base_mode = l->state.mode;
+        l->state.mode = LIGHT_MODE_FX; l->state.fx = fx; l->state.on = true;
+    } else if (l->state.mode == LIGHT_MODE_FX) {
+        l->state.mode = (light_mode_t)l->state.base_mode; l->state.fx = TELINK_FX_NONE;
+    }
+    ui_notify_light_state(addr);
+}
 void app_cmd_remove_light(uint16_t addr)
 {
     printf("[cmd] remove 0x%04x\n", addr);

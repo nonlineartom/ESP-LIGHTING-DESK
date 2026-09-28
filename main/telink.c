@@ -124,3 +124,92 @@ bool telink_decode_status(const uint8_t p[10], telink_status_t *out)
     }
     return false;
 }
+
+/* ------------------------------------------------------------------------- */
+/* first-generation effects, power reports                                    */
+/* ------------------------------------------------------------------------- */
+
+static const struct {
+    const char *name;
+    uint64_t    defaults;     /* preset parameters in the low 64 bits */
+    uint8_t     ibit;         /* position of the 10-bit intensity field */
+} s_fx[TELINK_FX_COUNT] = {
+    { "Club lights",  0x0014000000000000ull, 54 },
+    { "Paparazzi",    0x0016301400000000ull, 54 },
+    { "Lightning",    0x0016301528000000ull, 54 },
+    { "TV",           0x0014000000000000ull, 54 },
+    { "Candle",       0x0014000000000000ull, 54 },
+    { "Fire",         0x0014000000000000ull, 54 },
+    { "Strobe",       0x1500001920000000ull, 46 },
+    { "Explosion",    0x1500001910000000ull, 46 },
+    { "Faulty bulb",  0x1500001925000000ull, 46 },
+    { "Pulsing",      0x1500001925000000ull, 46 },
+    { "Welding",      0x1500001922400000ull, 46 },
+    { "Cop car",      0x0014800000000000ull, 54 },
+    { "Color chase",  0x0017200000000000ull, 54 },
+    { "Party lights", 0x0017200000000000ull, 54 },
+    { "Fireworks",    0x0014000000000000ull, 54 },
+};
+
+#define FX_STOP_ID 15
+
+const char *telink_effect_name(uint8_t fx_id)
+{
+    return fx_id < TELINK_FX_COUNT ? s_fx[fx_id].name : "";
+}
+
+void telink_effect(uint8_t fx_id, uint16_t intensity_0_1000, uint8_t out[10])
+{
+    if (fx_id >= TELINK_FX_COUNT) { telink_effect_stop(out); return; }
+    uint64_t v = intensity_0_1000 > 1000 ? 1000 : intensity_0_1000;
+    uint64_t lo = s_fx[fx_id].defaults | (1ull << 8) | (v << s_fx[fx_id].ibit);
+    for (int i = 0; i < 8; i++) out[i] = (uint8_t)(lo >> (i * 8));
+    out[8] = fx_id;
+    out[9] = TELINK_CMD_EFFECT;
+    out[0] = checksum(out);
+}
+
+void telink_effect_stop(uint8_t out[10])
+{
+    memset(out, 0, 10);
+    out[8] = FX_STOP_ID;
+    out[9] = TELINK_CMD_EFFECT;
+    out[0] = checksum(out);
+}
+
+void telink_power_request(uint8_t out[10])
+{
+    memset(out, 0, 10);
+    out[9] = TELINK_CMD_POWER_REQ;
+    out[0] = checksum(out);
+}
+
+bool telink_decode_effect(const uint8_t p[10], telink_effect_status_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    if (p[0] != checksum(p) || (p[9] & 0x7f) != 0x07) return false;
+    uint64_t lo = 0;
+    for (int i = 0; i < 8; i++) lo |= (uint64_t)p[i] << (i * 8);
+    out->on = (lo >> 8) & 1;
+    uint8_t id = p[8];
+    if (id >= TELINK_FX_COUNT) {
+        out->fx_id = TELINK_FX_NONE;
+        return true;
+    }
+    out->fx_id = id;
+    uint16_t v = (uint16_t)((lo >> s_fx[id].ibit) & 0x3ff);
+    out->intensity = v > 1000 ? 1000 : v;
+    return true;
+}
+
+bool telink_decode_power(const uint8_t p[10], telink_power_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    if (p[0] != checksum(p) || (p[9] & 0x7f) != TELINK_CMD_POWER_REQ) return false;
+    out->battery_minutes = (uint16_t)(p[3] | ((p[4] & 1) << 8));
+    uint8_t pct = p[4] >> 1;
+    out->battery_pct = pct > 100 ? 100 : pct;
+    out->battery_mv = (uint16_t)(p[5] | (p[6] << 8));
+    out->external_mv = (uint16_t)(p[7] | (p[8] << 8));
+    return true;
+}

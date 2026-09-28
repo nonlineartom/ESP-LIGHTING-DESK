@@ -135,6 +135,28 @@ lv_obj_t *ui_make_pill(lv_obj_t *parent, const char *text, int w, int h, lv_colo
     return btn;
 }
 
+static void pulse_exec(void *obj, int32_t v) { lv_obj_set_style_shadow_opa((lv_obj_t *)obj, (lv_opa_t)v, 0); }
+
+void ui_pulse(lv_obj_t *obj, bool on)
+{
+    bool running = lv_anim_get(obj, pulse_exec) != NULL;
+    if (on == running) return;
+    if (!on) {
+        lv_anim_delete(obj, pulse_exec);
+        return;
+    }
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, obj);
+    lv_anim_set_exec_cb(&a, pulse_exec);
+    lv_anim_set_values(&a, LV_OPA_20, LV_OPA_90);
+    lv_anim_set_duration(&a, 700);
+    lv_anim_set_reverse_duration(&a, 700);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_start(&a);
+}
+
 lv_obj_t *ui_make_handle(lv_obj_t *parent)
 {
     lv_obj_t *h = lv_obj_create(parent);

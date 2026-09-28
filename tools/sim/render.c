@@ -52,8 +52,14 @@ static void snap(const char *name)
 static light_t *add_light(const char *name, uint16_t addr, bool on, light_mode_t mode, uint16_t level,
                           uint16_t cct, int gm, uint16_t hue, uint8_t sat)
 {
-    uint8_t uuid[16] = { (uint8_t)addr, 1, 2, 3 }, key[16] = { 0 };
+    /* Sidus-style UUIDs so the product table applies: Key = amaran PT2c
+     * (HSI, G/M, battery, effects), Fill = amaran 100x (bi-colour only),
+     * Back = amaran T4c (HSI, all 15 effects). */
+    static const char *codes[] = { "400H5-DBFA30", "40035-3E4B58", "40095-1A2B3C" };
+    uint8_t uuid[16] = { 0 }, key[16] = { 0 };
+    memcpy(uuid, codes[(addr - 2) % 3], 12);
     light_t *l = lights_add(uuid, addr, 1, key, name);
+    snprintf(l->name, sizeof(l->name), "%s", name);
     l->configured = true;
     l->state.on = on;
     l->state.mode = mode;
@@ -140,6 +146,9 @@ int main(void)
     ui_system_set_open(true, true);
     run(600);
     snap("08_system");
+    ui_system_show_rename();
+    run(300);
+    snap("15_rename");
     ui_system_set_open(false, false);
     run(200);
 
@@ -182,6 +191,22 @@ int main(void)
     run(400);
     ui_scenes_set_open(false, false);
     run(100);
+
+    /* 13. effects on the PT2c, with its battery report */
+    ui_show_desk();
+    run(300);
+    ui_desk_goto(1, false);
+    g_lights[0].state.batt_pct = 53;
+    app_cmd_set_effect(2, 5);           /* Fire */
+    run(600);
+    snap("13_channel_fx");
+    app_cmd_set_effect(2, TELINK_FX_NONE);
+    run(300);
+
+    /* 14. bi-colour fixture: CCT only, no G/M, no effects */
+    ui_desk_goto(2, false);
+    run(500);
+    snap("14_channel_bicolor");
 
     /* 12. master with everything off */
     ui_show_desk();

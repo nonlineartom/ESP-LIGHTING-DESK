@@ -20,7 +20,7 @@ typedef struct {
     uint16_t intensity;   /* 0..1000 (output level) */
     uint16_t cct;
     int8_t   gm;
-    uint16_t hue;
+    uint16_t hue;         /* LIGHT_MODE_FX: effect id */
     uint8_t  sat;
 } scene_entry_t;
 

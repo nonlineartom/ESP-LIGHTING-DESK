@@ -29,8 +29,15 @@ typedef struct {
     uint16_t  addr;           /* 0 = master */
 
     /* channel only */
-    lv_obj_t *chip_cct, *chip_hsi;
-    lv_obj_t *band_cct, *band_hsi;
+    lv_obj_t *chip_cct, *chip_hsi, *chip_fx;
+    lv_obj_t *band_cct, *band_hsi, *band_fx;
+    lv_obj_t *fx_row;
+    lv_obj_t *fx_btn[TELINK_FX_COUNT];
+    lv_obj_t *batt;           /* battery line inside the disc */
+    bool      has_hsi;
+    uint16_t  fx_mask;
+    uint8_t   fx_shown;       /* effect highlighted in the row */
+    light_mode_t seen_mode;   /* last reported mode, to follow changes only */
     lv_obj_t *arc_cct, *arc_gm, *arc_sat;
     lv_obj_t *lbl_cct, *lbl_gm;
     lv_obj_t *card_gm;
@@ -235,27 +242,62 @@ static void on_sat(lv_event_t *e)
     send_hsi(pg);
 }
 
+static void chip_style(lv_obj_t *chip, bool active)
+{
+    lv_obj_set_style_bg_color(chip, active ? ui_col_accent : ui_col_panel, 0);
+    lv_obj_set_style_text_color(lv_obj_get_child(chip, 0), active ? ui_col_accent_dark : ui_col_text, 0);
+}
+
+/* Lay out the mode chips that this fixture supports, centred on one row.
+ * HSI drops the row below the colour wheel. */
+static void layout_chips(page_t *pg)
+{
+    lv_obj_t *chips[3];
+    int n = 0;
+    chips[n++] = pg->chip_cct;
+    if (pg->has_hsi) chips[n++] = pg->chip_hsi;
+    else             lv_obj_add_flag(pg->chip_hsi, LV_OBJ_FLAG_HIDDEN);
+    if (pg->fx_mask) chips[n++] = pg->chip_fx;
+    else             lv_obj_add_flag(pg->chip_fx, LV_OBJ_FLAG_HIDDEN);
+    const int w = 100, gap = 12;
+    int x = UI_CX - (n * w + (n - 1) * gap) / 2;
+    int y = pg->ui_mode == LIGHT_MODE_HSI ? 510 : 466;
+    for (int i = 0; i < n; i++) {
+        lv_obj_remove_flag(chips[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_pos(chips[i], x + i * (w + gap), y);
+    }
+}
+
 static void show_mode(page_t *pg, light_mode_t m, bool animate)
 {
     pg->ui_mode = m;
-    bool cct = (m == LIGHT_MODE_CCT);
-    lv_obj_t *show = cct ? pg->band_cct : pg->band_hsi;
-    lv_obj_t *hide = cct ? pg->band_hsi : pg->band_cct;
+    lv_obj_t *bands[3] = { pg->band_cct, pg->band_hsi, pg->band_fx };
+    for (int i = 0; i < 3; i++) {
+        if (i == (int)m) continue;
+        lv_obj_add_flag(bands[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_t *show = bands[m];
     lv_obj_remove_flag(show, LV_OBJ_FLAG_HIDDEN);
     if (animate) {
         lv_obj_set_style_opa(show, LV_OPA_TRANSP, 0);
         ui_anim_opa(show, LV_OPA_COVER, 180);
-        lv_obj_add_flag(hide, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_set_style_opa(show, LV_OPA_COVER, 0);
-        lv_obj_add_flag(hide, LV_OBJ_FLAG_HIDDEN);
     }
-    lv_obj_set_style_bg_color(pg->chip_cct, cct ? ui_col_accent : ui_col_panel, 0);
-    lv_obj_set_style_text_color(lv_obj_get_child(pg->chip_cct, 0), cct ? ui_col_accent_dark : ui_col_text, 0);
-    lv_obj_set_style_bg_color(pg->chip_hsi, !cct ? ui_col_accent : ui_col_panel, 0);
-    lv_obj_set_style_text_color(lv_obj_get_child(pg->chip_hsi, 0), !cct ? ui_col_accent_dark : ui_col_text, 0);
-    lv_obj_set_y(pg->chip_cct, cct ? 466 : 510);
-    lv_obj_set_y(pg->chip_hsi, cct ? 466 : 510);
+    chip_style(pg->chip_cct, m == LIGHT_MODE_CCT);
+    chip_style(pg->chip_hsi, m == LIGHT_MODE_HSI);
+    chip_style(pg->chip_fx, m == LIGHT_MODE_FX);
+    layout_chips(pg);
+}
+
+static void fx_highlight(page_t *pg, uint8_t fx)
+{
+    pg->fx_shown = fx;
+    for (int i = 0; i < TELINK_FX_COUNT; i++) {
+        if (pg->fx_btn[i]) chip_style(pg->fx_btn[i], i == fx);
+    }
+    if (fx < TELINK_FX_COUNT && pg->fx_btn[fx])
+        lv_obj_scroll_to_view(pg->fx_btn[fx], LV_ANIM_ON);
 }
 
 static void on_chip_cct(lv_event_t *e)
@@ -274,6 +316,31 @@ static void on_chip_hsi(lv_event_t *e)
     send_hsi(pg);
 }
 
+static void on_chip_fx(lv_event_t *e)
+{
+    page_t *pg = (page_t *)lv_event_get_user_data(e);
+    if (pg->ui_mode == LIGHT_MODE_FX) return;
+    /* only reveals the effect row; the light changes when an effect is picked */
+    show_mode(pg, LIGHT_MODE_FX, true);
+}
+
+static void on_fx(lv_event_t *e)
+{
+    lv_obj_t *btn = lv_event_get_target(e);
+    page_t *pg = (page_t *)lv_event_get_user_data(e);
+    uint8_t fx = (uint8_t)(uintptr_t)lv_obj_get_user_data(btn);
+    light_t l;
+    bool running = page_light(pg, &l) && l.state.mode == LIGHT_MODE_FX && l.state.fx == fx;
+    if (running) {
+        app_cmd_set_effect(pg->addr, TELINK_FX_NONE);   /* tap the running effect to stop it */
+        fx_highlight(pg, TELINK_FX_NONE);
+    } else {
+        app_cmd_set_effect(pg->addr, fx);
+        fx_highlight(pg, fx);
+    }
+}
+
+static void on_name_long(lv_event_t *e) { (void)e; ui_system_show_rename(); }
 static void on_all_on(lv_event_t *e)  { (void)e; app_cmd_all_power(true); }
 static void on_all_off(lv_event_t *e) { (void)e; app_cmd_all_power(false); }
 static void on_pair(lv_event_t *e)    { (void)e; app_cmd_pair_start(); ui_show_pair(); }
@@ -396,6 +463,10 @@ static lv_obj_t *make_disc(lv_obj_t *page, page_t *pg)
     lv_obj_set_style_text_font(pg->sub, ui_font_small, 0);
     lv_obj_set_style_text_color(pg->sub, ui_col_bg, 0);
     lv_obj_align(pg->sub, LV_ALIGN_CENTER, 0, 30);
+    pg->batt = lv_label_create(disc);
+    lv_obj_set_style_text_font(pg->batt, ui_font_small, 0);
+    lv_obj_align(pg->batt, LV_ALIGN_CENTER, 0, 62);
+    lv_obj_add_flag(pg->batt, LV_OBJ_FLAG_HIDDEN);
     return disc;
 }
 
@@ -509,6 +580,43 @@ static lv_obj_t *make_control(lv_obj_t *band, int x, const char *caption, int mi
     return card;
 }
 
+static void make_fx_tools(page_t *pg)
+{
+    pg->band_fx = make_band(pg->page);
+    lv_obj_t *cap = lv_label_create(pg->band_fx);
+    lv_label_set_text(cap, "EFFECT  \xE2\x80\xA2  tap again to stop");
+    lv_obj_set_style_text_font(cap, ui_font_small, 0);
+    lv_obj_set_style_text_color(cap, ui_col_muted, 0);
+    lv_obj_align(cap, LV_ALIGN_TOP_MID, 0, 518);
+
+    /* one scrolling row of pills: wide enough for any count, inside the glass */
+    pg->fx_row = lv_obj_create(pg->band_fx);
+    lv_obj_set_size(pg->fx_row, 470, 72);
+    lv_obj_set_pos(pg->fx_row, UI_CX - 235, 548);
+    lv_obj_set_style_bg_opa(pg->fx_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(pg->fx_row, 0, 0);
+    lv_obj_set_style_pad_hor(pg->fx_row, 8, 0);
+    lv_obj_set_style_pad_ver(pg->fx_row, 6, 0);
+    lv_obj_set_style_pad_column(pg->fx_row, 10, 0);
+    lv_obj_set_flex_flow(pg->fx_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(pg->fx_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_scroll_dir(pg->fx_row, LV_DIR_HOR);
+    lv_obj_set_scroll_snap_x(pg->fx_row, LV_SCROLL_SNAP_CENTER);
+    lv_obj_set_scrollbar_mode(pg->fx_row, LV_SCROLLBAR_MODE_OFF);
+    /* horizontal drags here scroll the row, not the desk carousel */
+    lv_obj_remove_flag(pg->fx_row, LV_OBJ_FLAG_SCROLL_CHAIN_HOR);
+    for (int i = 0; i < TELINK_FX_COUNT; i++) {
+        if (!(pg->fx_mask & (1u << i))) continue;
+        lv_obj_t *b = ui_make_pill(pg->fx_row, telink_effect_name((uint8_t)i), 10, 56, ui_col_panel, ui_font_normal);
+        lv_obj_set_width(b, LV_SIZE_CONTENT);
+        lv_obj_set_style_pad_hor(b, 24, 0);
+        lv_obj_set_user_data(b, (void *)(uintptr_t)i);
+        lv_obj_add_event_cb(b, on_fx, LV_EVENT_CLICKED, pg);
+        pg->fx_btn[i] = b;
+    }
+    pg->fx_shown = TELINK_FX_NONE;
+}
+
 static void build_channel(page_t *pg, const light_t *l)
 {
     pg->page = make_page();
@@ -518,6 +626,9 @@ static void build_channel(page_t *pg, const light_t *l)
     make_hsi_tools(pg);
     pg->disc = make_disc(pg->page, pg);
     pg->name = make_page_title(pg->page, l->name, false);
+    lv_obj_add_flag(pg->name, LV_OBJ_FLAG_CLICKABLE);         /* long-press the name to rename */
+    lv_obj_set_ext_click_area(pg->name, 12);
+    lv_obj_add_event_cb(pg->name, on_name_long, LV_EVENT_LONG_PRESSED, NULL);
 
     pg->chip_cct = ui_make_pill(pg->page, "CCT", 100, 40, ui_col_panel, ui_font_normal);
     lv_obj_set_pos(pg->chip_cct, UI_CX - 108, 466);
@@ -525,6 +636,11 @@ static void build_channel(page_t *pg, const light_t *l)
     pg->chip_hsi = ui_make_pill(pg->page, "HSI", 100, 40, ui_col_panel, ui_font_normal);
     lv_obj_set_pos(pg->chip_hsi, UI_CX + 8, 466);
     lv_obj_add_event_cb(pg->chip_hsi, on_chip_hsi, LV_EVENT_CLICKED, pg);
+    pg->chip_fx = ui_make_pill(pg->page, "FX", 100, 40, ui_col_panel, ui_font_normal);
+    lv_obj_add_event_cb(pg->chip_fx, on_chip_fx, LV_EVENT_CLICKED, pg);
+    pg->has_hsi = l->has_hsi;
+    pg->fx_mask = l->fx_mask;
+    make_fx_tools(pg);
 
     /* Two fixed control cards keep values and touch targets clear of the rim. */
     pg->band_cct = make_band(pg->page);
@@ -533,6 +649,7 @@ static void build_channel(page_t *pg, const light_t *l)
     pg->card_gm = make_control(pg->band_cct, 365, "G/M", -10, 10,
                                lv_color_hex(0x9ddd9d), on_gm, pg, &pg->lbl_gm, &pg->arc_gm);
 
+    pg->seen_mode = l->state.mode;
     show_mode(pg, l->state.mode, false);
 }
 
@@ -618,12 +735,33 @@ static void refresh_channel(page_t *pg, bool animate)
     }
     if (!l.configured)      lv_label_set_text(pg->sub, "setup incomplete");
     else if (!st->reported) lv_label_set_text(pg->sub, "no report yet");
+    else if (st->mode == LIGHT_MODE_FX) lv_label_set_text(pg->sub, telink_effect_name(st->fx));
     else if (st->mode == LIGHT_MODE_HSI) lv_label_set_text_fmt(pg->sub, "%u\xC2\xB0 %u%%", st->hue, st->sat);
+    else if (!l.has_gm || st->gm == 0) lv_label_set_text_fmt(pg->sub, "%uK", st->cct);
     else lv_label_set_text_fmt(pg->sub, "%uK %s%d", st->cct, st->gm > 0 ? "+" : "", st->gm);
 
-    if (st->reported && st->mode != pg->ui_mode && !lv_obj_has_state(pg->arc_cct, LV_STATE_PRESSED) &&
+    /* follow the light when its mode changes (another controller, a scene),
+     * but leave a tab the user opened alone (FX before picking an effect) */
+    if (st->mode != pg->seen_mode && !lv_obj_has_state(pg->arc_cct, LV_STATE_PRESSED) &&
         !lv_obj_has_state(pg->wheel, LV_STATE_PRESSED)) {
-        show_mode(pg, st->mode, animate);
+        pg->seen_mode = st->mode;
+        if (st->mode != pg->ui_mode) show_mode(pg, st->mode, animate);
+    }
+    uint8_t fx_now = st->mode == LIGHT_MODE_FX ? st->fx : TELINK_FX_NONE;
+    if (fx_now != pg->fx_shown) fx_highlight(pg, fx_now);
+    ui_pulse(pg->disc, st->on && st->mode == LIGHT_MODE_FX);
+
+    if (st->batt_pct >= 0) {
+        const char *sym = st->ext_power ? LV_SYMBOL_CHARGE :
+                          st->batt_pct > 80 ? LV_SYMBOL_BATTERY_FULL :
+                          st->batt_pct > 55 ? LV_SYMBOL_BATTERY_3 :
+                          st->batt_pct > 30 ? LV_SYMBOL_BATTERY_2 :
+                          st->batt_pct > 10 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY;
+        lv_label_set_text_fmt(pg->batt, "%s %d%%", sym, st->batt_pct);
+        lv_obj_set_style_text_color(pg->batt, st->batt_pct <= 15 && !st->ext_power ? ui_col_warn : ink, 0);
+        lv_obj_remove_flag(pg->batt, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(pg->batt, LV_OBJ_FLAG_HIDDEN);
     }
     lv_slider_set_range(pg->arc_cct, l.cct_min, l.cct_max);
     if (!lv_obj_has_state(pg->arc_cct, LV_STATE_PRESSED)) {
@@ -642,10 +780,11 @@ static void refresh_channel(page_t *pg, bool animate)
         slider_set(pg->arc_sat, st->sat);
         lv_label_set_text_fmt(pg->sat_value, "%u%%", st->sat);
     }
-    if (l.has_hsi) lv_obj_remove_flag(pg->chip_hsi, LV_OBJ_FLAG_HIDDEN);
-    else           lv_obj_add_flag(pg->chip_hsi, LV_OBJ_FLAG_HIDDEN);
+    if (pg->has_hsi != l.has_hsi) { pg->has_hsi = l.has_hsi; layout_chips(pg); }
     if (l.has_gm) lv_obj_remove_flag(pg->card_gm, LV_OBJ_FLAG_HIDDEN);
     else          lv_obj_add_flag(pg->card_gm, LV_OBJ_FLAG_HIDDEN);
+    /* a lone TEMP card sits centred */
+    lv_obj_set_x(lv_obj_get_parent(pg->arc_cct), l.has_gm ? 165 : UI_CX - 95);
     s_refreshing = false;
 }
 
@@ -792,6 +931,7 @@ void ui_desk_create(lv_obj_t *screen)
     lv_obj_set_style_bg_opa(s_carousel, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_carousel, 0, 0);
     lv_obj_set_style_pad_all(s_carousel, 0, 0);
+    lv_obj_set_style_pad_column(s_carousel, 0, 0);   /* pages exactly UI_W apart */
     lv_obj_set_style_radius(s_carousel, 0, 0);
     lv_obj_set_flex_flow(s_carousel, LV_FLEX_FLOW_ROW);
     lv_obj_set_scroll_dir(s_carousel, LV_DIR_HOR);

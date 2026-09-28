@@ -19,6 +19,7 @@ extern "C" {
 typedef enum {
     LIGHT_MODE_CCT = 0,
     LIGHT_MODE_HSI = 1,
+    LIGHT_MODE_FX  = 2,       /* a built-in effect is running (state.fx) */
 } light_mode_t;
 
 typedef struct {
@@ -30,8 +31,15 @@ typedef struct {
     int8_t       gm;          /* -10..+10 */
     uint16_t     hue;         /* 0..360 */
     uint8_t      sat;         /* 0..100 */
+    uint8_t      fx;          /* effect id (LIGHT_MODE_FX), TELINK_FX_NONE otherwise */
+    uint8_t      base_mode;   /* CCT / HSI to return to when the effect stops */
     bool         reported;    /* at least one status report received */
     uint32_t     last_report_ms;
+
+    /* battery fixtures only (0x0a power report); batt_pct < 0 = unknown */
+    int8_t       batt_pct;
+    bool         ext_power;
+    uint32_t     batt_ms;
 } light_state_t;
 
 typedef struct {
@@ -50,6 +58,8 @@ typedef struct {
     uint16_t cct_min, cct_max;
     bool     has_hsi;
     bool     has_gm;
+    bool     has_battery;     /* from the product table (not persisted) */
+    uint16_t fx_mask;         /* supported first-generation effects, bit = id */
 
     light_state_t state;      /* runtime only */
 } light_t;
@@ -74,6 +84,11 @@ light_t *lights_add(const uint8_t uuid[16], uint16_t addr, uint8_t elem_count,
 /* Name a light "Light N" (or keep a given name) unless its UUID identifies
  * the fixture, then use the product name ("amaran PT2c", "amaran PT2c 2"). */
 bool     lights_apply_product_name(light_t *l);
+/* Capabilities (CCT range, HSI, G/M, battery, effects) from the product
+ * table; returns false when the fixture is not in it (defaults kept). */
+bool     lights_apply_product_caps(light_t *l);
+/* Product name for a light ("amaran PT2c"), or NULL. */
+const char *lights_product_name(const light_t *l);
 void     lights_remove(light_t *l);
 void     lights_apply_status(light_t *l, const telink_status_t *st, uint32_t now_ms);
 

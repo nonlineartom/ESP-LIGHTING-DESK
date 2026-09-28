@@ -1,31 +1,163 @@
 /*
- * System sheet: drops from the top rim.  Link status, pairing, naming and
- * removing the current channel's light, factory reset.
+ * System sheet: drops from the top rim over a dimmed desk.  Link status,
+ * pairing, and for the current channel's light: what it is (product, ID,
+ * range, battery), rename, identify, remove.  Factory reset at the bottom.
  */
 #include <stdio.h>
 #include <string.h>
 
 #include "app_core.h"
+#include "products.h"
 #include "ui.h"
 
-#define SHEET_H        510
+#define SHEET_H        600
 #define SHEET_OPEN_Y   0
-#define SHEET_CLOSED_Y (-SHEET_H)
+#define SHEET_CLOSED_Y (-SHEET_H - 40)
 
+static lv_obj_t *s_scrim;
 static lv_obj_t *s_sheet;
-static lv_obj_t *s_link_icon, *s_link_text;
+static lv_obj_t *s_link_text;
 static lv_obj_t *s_btn_pair;
-static lv_obj_t *s_name_btn, *s_name_lbl;
+static lv_obj_t *s_card, *s_card_name, *s_card_info, *s_card_info2;
+static lv_obj_t *s_btn_rename, *s_btn_identify;
 static lv_obj_t *s_btn_remove;
 static lv_obj_t *s_btn_reset;
-static lv_obj_t *s_hint;
+static lv_obj_t *s_title;
 static lv_obj_t *s_diag_status;
 static bool      s_open;
 
+/* rename screen */
+static lv_obj_t *s_rename, *s_rename_ta;
+static uint16_t  s_rename_addr;
+
 static const char *const k_names[] = {
-    "Key", "Fill", "Back", "Rim", "Top", "Hair", "Kicker", "Background", "Practical", "Light",
+    "Key", "Fill", "Back", "Rim", "Hair", "Top", "Kicker", "Practical",
 };
 #define NAME_COUNT (sizeof(k_names) / sizeof(k_names[0]))
+
+static bool current_light(light_t *copy)
+{
+    uint16_t addr = ui_desk_current_addr();
+    if (!addr) return false;
+    bool have = false;
+    app_core_lock();
+    light_t *l = lights_find_by_addr(addr);
+    if (l) { *copy = *l; have = true; }
+    app_core_unlock();
+    return have;
+}
+
+/* ------------------------------------------------------------------------- */
+/* rename screen                                                              */
+/* ------------------------------------------------------------------------- */
+
+static void rename_close(void)
+{
+    if (s_rename) lv_obj_add_flag(s_rename, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void rename_commit(void)
+{
+    const char *txt = lv_textarea_get_text(s_rename_ta);
+    while (*txt == ' ') txt++;
+    if (s_rename_addr && txt[0]) {
+        app_cmd_rename_light(s_rename_addr, txt);
+        lv_label_set_text(s_card_name, txt);
+    }
+    rename_close();
+}
+
+static void on_rename_kb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_READY) rename_commit();
+    else if (code == LV_EVENT_CANCEL) rename_close();
+}
+
+static void on_rename_save(lv_event_t *e)   { (void)e; rename_commit(); }
+static void on_rename_cancel(lv_event_t *e) { (void)e; rename_close(); }
+
+static void on_rename_chip(lv_event_t *e)
+{
+    const char *name = (const char *)lv_event_get_user_data(e);
+    lv_textarea_set_text(s_rename_ta, name);
+}
+
+static void build_rename(void)
+{
+    s_rename = lv_obj_create(ui_desk_screen());
+    lv_obj_set_size(s_rename, UI_W, UI_H);
+    lv_obj_set_pos(s_rename, 0, 0);
+    lv_obj_set_style_bg_color(s_rename, ui_col_bg, 0);
+    lv_obj_set_style_bg_opa(s_rename, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_rename, 0, 0);
+    lv_obj_set_style_radius(s_rename, 0, 0);
+    lv_obj_set_style_pad_all(s_rename, 0, 0);
+    lv_obj_remove_flag(s_rename, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
+
+    lv_obj_t *title = lv_label_create(s_rename);
+    lv_label_set_text(title, "Rename light");
+    lv_obj_set_style_text_font(title, ui_font_medium, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 62);
+
+    s_rename_ta = lv_textarea_create(s_rename);
+    lv_textarea_set_one_line(s_rename_ta, true);
+    lv_textarea_set_max_length(s_rename_ta, LIGHT_NAME_LEN - 1);
+    lv_obj_set_size(s_rename_ta, 440, 60);
+    lv_obj_align(s_rename_ta, LV_ALIGN_TOP_MID, 0, 112);
+    lv_obj_set_style_text_font(s_rename_ta, ui_font_medium, 0);
+    lv_obj_set_style_bg_color(s_rename_ta, ui_col_panel, 0);
+    lv_obj_set_style_border_color(s_rename_ta, ui_col_accent, LV_STATE_FOCUSED);
+    lv_obj_set_style_radius(s_rename_ta, 18, 0);
+
+    /* quick studio names, two rows */
+    for (unsigned i = 0; i < NAME_COUNT; i++) {
+        lv_obj_t *c = ui_make_pill(s_rename, k_names[i], 112, 44, ui_col_panel_hi, ui_font_small);
+        int row = i / 4, col = i % 4;
+        lv_obj_set_pos(c, UI_CX - 242 + col * 122, 190 + row * 54);
+        lv_obj_add_event_cb(c, on_rename_chip, LV_EVENT_CLICKED, (void *)k_names[i]);
+    }
+
+    lv_obj_t *kb = lv_keyboard_create(s_rename);
+    lv_obj_set_size(kb, 560, 250);
+    lv_obj_align(kb, LV_ALIGN_TOP_MID, 0, 306);
+    lv_obj_set_style_bg_opa(kb, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_text_font(kb, ui_font_normal, 0);
+    lv_keyboard_set_textarea(kb, s_rename_ta);
+    lv_obj_add_event_cb(kb, on_rename_kb, LV_EVENT_READY, NULL);
+    lv_obj_add_event_cb(kb, on_rename_kb, LV_EVENT_CANCEL, NULL);
+
+    lv_obj_t *cancel = ui_make_pill(s_rename, "Cancel", 140, 52, ui_col_panel, ui_font_normal);
+    lv_obj_set_pos(cancel, UI_CX - 150, 574);
+    lv_obj_add_event_cb(cancel, on_rename_cancel, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *save = ui_make_pill(s_rename, "Save", 140, 52, ui_col_accent, ui_font_normal);
+    lv_obj_set_style_text_color(lv_obj_get_child(save, 0), ui_col_accent_dark, 0);
+    lv_obj_set_pos(save, UI_CX + 10, 574);
+    lv_obj_add_event_cb(save, on_rename_save, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_add_flag(s_rename, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void on_rename(lv_event_t *e)
+{
+    (void)e;
+    ui_system_show_rename();
+}
+
+void ui_system_show_rename(void)
+{
+    light_t l;
+    if (!current_light(&l)) return;
+    if (!s_rename) build_rename();
+    s_rename_addr = l.addr;
+    lv_textarea_set_text(s_rename_ta, l.name);
+    lv_obj_remove_flag(s_rename, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_rename);
+}
+
+/* ------------------------------------------------------------------------- */
+/* sheet actions                                                              */
+/* ------------------------------------------------------------------------- */
 
 static void on_pair(lv_event_t *e)
 {
@@ -35,25 +167,12 @@ static void on_pair(lv_event_t *e)
     ui_show_pair();
 }
 
-static void on_name(lv_event_t *e)
+static void on_identify(lv_event_t *e)
 {
     (void)e;
     uint16_t addr = ui_desk_current_addr();
-    if (!addr) return;
-    light_t copy;
-    bool have = false;
-    app_core_lock();
-    light_t *l = lights_find_by_addr(addr);
-    if (l) { copy = *l; have = true; }
-    app_core_unlock();
-    if (!have) return;
-    /* cycle to the next preset name after the current one */
-    int cur = -1;
-    for (unsigned i = 0; i < NAME_COUNT; i++) if (strcmp(copy.name, k_names[i]) == 0) cur = (int)i;
-    const char *next = k_names[(cur + 1) % NAME_COUNT];
-    app_cmd_rename_light(addr, next);
-    lv_label_set_text_fmt(s_name_lbl, "Name: %s   " LV_SYMBOL_RIGHT, next);
-    ui_breathe(s_name_btn);
+    if (addr) app_cmd_identify(addr);
+    ui_breathe(s_btn_identify);
 }
 
 static void on_remove_confirm(lv_event_t *e)
@@ -100,9 +219,9 @@ static void on_reset(lv_event_t *e)
     lv_obj_center(mbox);
 }
 
-/* Hidden diagnostic: long-press the "MeshDeck" label to send a standard
- * Light Lightness Set with a 1 s transition to the current channel
- * (alternating 50 % / 100 %).  Watch the fixture and the serial log. */
+/* Hidden diagnostic: long-press "SYSTEM" to send a standard Light Lightness
+ * Set with a 1 s transition to the current channel (alternating 50 % /
+ * 100 %).  Watch the fixture and the serial log. */
 static void on_diag(lv_event_t *e)
 {
     (void)e;
@@ -115,10 +234,34 @@ static void on_diag(lv_event_t *e)
     lv_obj_remove_flag(s_diag_status, LV_OBJ_FLAG_HIDDEN);
 }
 
-static void on_handle(lv_event_t *e) { (void)e; ui_system_set_open(false, true); }
+static void on_close(lv_event_t *e) { (void)e; ui_system_set_open(false, true); }
+
+static lv_obj_t *centered_label(lv_obj_t *parent, const lv_font_t *font, lv_color_t col, int w, int y)
+{
+    lv_obj_t *l = lv_label_create(parent);
+    lv_obj_set_width(l, w);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(l, font, 0);
+    lv_obj_set_style_text_color(l, col, 0);
+    lv_obj_align(l, LV_ALIGN_TOP_MID, 0, y);
+    return l;
+}
 
 void ui_system_create(lv_obj_t *screen)
 {
+    /* dims the desk while the sheet is down; a tap anywhere on it closes */
+    s_scrim = lv_obj_create(screen);
+    lv_obj_set_size(s_scrim, UI_W, UI_H);
+    lv_obj_set_pos(s_scrim, 0, 0);
+    lv_obj_set_style_bg_color(s_scrim, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_scrim, LV_OPA_60, 0);
+    lv_obj_set_style_border_width(s_scrim, 0, 0);
+    lv_obj_set_style_radius(s_scrim, 0, 0);
+    lv_obj_remove_flag(s_scrim, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_scrim, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_scrim, on_close, LV_EVENT_CLICKED, NULL);
+
     s_sheet = lv_obj_create(screen);
     lv_obj_set_size(s_sheet, UI_W, SHEET_H);
     lv_obj_set_pos(s_sheet, 0, SHEET_CLOSED_Y);
@@ -134,64 +277,59 @@ void ui_system_create(lv_obj_t *screen)
     lv_obj_set_style_pad_all(s_sheet, 0, 0);
     lv_obj_remove_flag(s_sheet, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
 
-    s_link_icon = lv_label_create(s_sheet);
-    lv_label_set_text(s_link_icon, LV_SYMBOL_BLUETOOTH);
-    lv_obj_set_style_text_font(s_link_icon, ui_font_title, 0);
-    lv_obj_align(s_link_icon, LV_ALIGN_TOP_MID, 0, 84);
+    s_title = centered_label(s_sheet, ui_font_medium, ui_col_text, 300, 30);
+    lv_label_set_text(s_title, "SYSTEM");
+    lv_obj_set_style_pad_all(s_title, 8, 0);
+    lv_obj_add_flag(s_title, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_title, on_diag, LV_EVENT_LONG_PRESSED, NULL);
 
-    s_link_text = lv_label_create(s_sheet);
-    lv_obj_set_style_text_font(s_link_text, ui_font_normal, 0);
-    lv_obj_set_style_text_align(s_link_text, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(s_link_text, 390);
-    lv_label_set_long_mode(s_link_text, LV_LABEL_LONG_DOT);
-    lv_obj_align(s_link_text, LV_ALIGN_TOP_MID, 0, 134);
+    s_link_text = centered_label(s_sheet, ui_font_normal, ui_col_ok, 420, 88);
 
     s_btn_pair = ui_make_pill(s_sheet, LV_SYMBOL_PLUS "  Pair a light", 300, 56, ui_col_accent, ui_font_normal);
-    lv_obj_set_style_text_color(s_btn_pair, ui_col_accent_dark, 0);
-    lv_obj_align(s_btn_pair, LV_ALIGN_TOP_MID, 0, 184);
+    lv_obj_set_style_text_color(lv_obj_get_child(s_btn_pair, 0), ui_col_accent_dark, 0);
+    lv_obj_align(s_btn_pair, LV_ALIGN_TOP_MID, 0, 134);
     lv_obj_add_event_cb(s_btn_pair, on_pair, LV_EVENT_CLICKED, NULL);
 
-    s_name_btn = ui_make_pill(s_sheet, "Name", 360, 52, ui_col_panel, ui_font_normal);
-    lv_obj_align(s_name_btn, LV_ALIGN_TOP_MID, 0, 258);
-    lv_obj_add_event_cb(s_name_btn, on_name, LV_EVENT_CLICKED, NULL);
-    s_name_lbl = lv_obj_get_child(s_name_btn, 0);
+    /* the current channel's light */
+    s_card = lv_obj_create(s_sheet);
+    lv_obj_set_size(s_card, 500, 116);
+    lv_obj_align(s_card, LV_ALIGN_TOP_MID, 0, 208);
+    lv_obj_set_style_radius(s_card, 26, 0);
+    lv_obj_set_style_bg_color(s_card, ui_col_panel, 0);
+    lv_obj_set_style_border_width(s_card, 1, 0);
+    lv_obj_set_style_border_color(s_card, ui_col_panel_hi, 0);
+    lv_obj_set_style_pad_all(s_card, 0, 0);
+    lv_obj_remove_flag(s_card, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    s_card_name = centered_label(s_card, ui_font_medium, ui_col_text, 460, 10);
+    s_card_info = centered_label(s_card, ui_font_small, ui_col_muted, 460, 50);
+    s_card_info2 = centered_label(s_card, ui_font_small, ui_col_muted, 460, 78);
 
-    s_btn_remove = ui_make_pill(s_sheet, LV_SYMBOL_TRASH "  Remove this light", 360, 52, ui_col_panel, ui_font_normal);
-    lv_obj_set_style_text_color(s_btn_remove, ui_col_warn, 0);
-    lv_obj_align(s_btn_remove, LV_ALIGN_TOP_MID, 0, 324);
+    s_btn_rename = ui_make_pill(s_sheet, LV_SYMBOL_EDIT "  Rename", 200, 56, ui_col_panel_hi, ui_font_normal);
+    lv_obj_set_pos(s_btn_rename, UI_CX - 210, 340);
+    lv_obj_add_event_cb(s_btn_rename, on_rename, LV_EVENT_CLICKED, NULL);
+    s_btn_identify = ui_make_pill(s_sheet, LV_SYMBOL_EYE_OPEN "  Identify", 200, 56, ui_col_panel_hi, ui_font_normal);
+    lv_obj_set_pos(s_btn_identify, UI_CX + 10, 340);
+    lv_obj_add_event_cb(s_btn_identify, on_identify, LV_EVENT_CLICKED, NULL);
+
+    s_btn_remove = ui_make_pill(s_sheet, LV_SYMBOL_TRASH "  Remove", 410, 52, ui_col_panel, ui_font_normal);
+    lv_obj_set_style_text_color(lv_obj_get_child(s_btn_remove, 0), ui_col_warn, 0);
+    lv_obj_align(s_btn_remove, LV_ALIGN_TOP_MID, 0, 410);
     lv_obj_add_event_cb(s_btn_remove, on_remove, LV_EVENT_CLICKED, NULL);
 
-    s_btn_reset = lv_label_create(s_sheet);
+    s_btn_reset = centered_label(s_sheet, ui_font_small, ui_col_muted, 220, 478);
     lv_label_set_text(s_btn_reset, "Factory reset");
-    lv_obj_set_style_text_font(s_btn_reset, ui_font_small, 0);
-    lv_obj_set_style_text_color(s_btn_reset, ui_col_muted, 0);
     lv_obj_set_style_pad_all(s_btn_reset, 10, 0);
     lv_obj_add_flag(s_btn_reset, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_align(s_btn_reset, LV_ALIGN_TOP_MID, 0, 400);
     lv_obj_add_event_cb(s_btn_reset, on_reset, LV_EVENT_CLICKED, NULL);
 
-    s_hint = lv_label_create(s_sheet);
-    lv_label_set_text(s_hint, "SYSTEM");
-    lv_obj_set_style_text_font(s_hint, ui_font_medium, 0);
-    lv_obj_set_style_text_color(s_hint, ui_col_text, 0);
-    lv_obj_align(s_hint, LV_ALIGN_TOP_MID, 0, 28);
-    lv_obj_set_style_pad_all(s_hint, 12, 0);
-    lv_obj_add_flag(s_hint, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_hint, on_diag, LV_EVENT_LONG_PRESSED, NULL);
-
-    s_diag_status = lv_label_create(s_sheet);
-    lv_obj_set_width(s_diag_status, 420);
-    lv_obj_set_style_text_align(s_diag_status, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(s_diag_status, ui_font_small, 0);
-    lv_obj_set_style_text_color(s_diag_status, ui_col_warn, 0);
-    lv_obj_align(s_diag_status, LV_ALIGN_TOP_MID, 0, 447);
+    s_diag_status = centered_label(s_sheet, ui_font_small, ui_col_warn, 420, 526);
     lv_obj_add_flag(s_diag_status, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *handle = ui_make_handle(s_sheet);
     lv_obj_align(handle, LV_ALIGN_BOTTOM_MID, 0, -14);
     lv_obj_add_flag(handle, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(handle, 30);
-    lv_obj_add_event_cb(handle, on_handle, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(handle, on_close, LV_EVENT_CLICKED, NULL);
 
     ui_system_refresh();
 }
@@ -203,25 +341,39 @@ void ui_system_refresh(void)
     lv_color_t col = ui_col_muted;
     if (st == LINK_ONLINE) col = ui_col_ok;
     else if (st == LINK_SCANNING || st == LINK_CONNECTING || st == LINK_PAIRING) col = ui_col_accent;
-    lv_obj_set_style_text_color(s_link_icon, col, 0);
-    lv_label_set_text(s_link_text, app_core_link_text());
+    lv_obj_set_style_text_color(s_link_text, col, 0);
+    lv_label_set_text_fmt(s_link_text, LV_SYMBOL_BLUETOOTH "  %s", app_core_link_text());
 
-    uint16_t addr = ui_desk_current_addr();
-    light_t copy;
-    bool have = false;
-    app_core_lock();
-    light_t *l = addr ? lights_find_by_addr(addr) : NULL;
-    if (l) { copy = *l; have = true; }
-    app_core_unlock();
-    if (have) {
-        lv_obj_remove_flag(s_name_btn, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(s_btn_remove, LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text_fmt(s_name_lbl, "Name: %s   " LV_SYMBOL_RIGHT, copy.name);
-        lv_label_set_text_fmt(lv_obj_get_child(s_btn_remove, 0), LV_SYMBOL_TRASH "  Remove %s", copy.name);
-    } else {
-        lv_obj_add_flag(s_name_btn, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_btn_remove, LV_OBJ_FLAG_HIDDEN);
+    light_t l;
+    lv_obj_t *per_light[] = { s_card, s_btn_rename, s_btn_identify, s_btn_remove };
+    if (!current_light(&l)) {
+        for (unsigned i = 0; i < sizeof(per_light) / sizeof(per_light[0]); i++)
+            lv_obj_add_flag(per_light[i], LV_OBJ_FLAG_HIDDEN);
+        return;
     }
+    for (unsigned i = 0; i < sizeof(per_light) / sizeof(per_light[0]); i++)
+        lv_obj_remove_flag(per_light[i], LV_OBJ_FLAG_HIDDEN);
+
+    lv_label_set_text(s_card_name, l.name);
+    const char *product = lights_product_name(&l);
+    char tail[7];
+    if (product && sidus_uuid_mac_tail(l.uuid, tail))
+        lv_label_set_text_fmt(s_card_info, "%s  \xE2\x80\xA2  ID %s", product, tail);
+    else
+        lv_label_set_text_fmt(s_card_info, "Mesh address 0x%04X", l.addr);
+
+    char extra[64];
+    int n = snprintf(extra, sizeof(extra), "%u-%uK", l.cct_min, l.cct_max);
+    if (l.has_hsi) n += snprintf(extra + n, sizeof(extra) - n, "  \xE2\x80\xA2  colour");
+    if (l.fx_mask) n += snprintf(extra + n, sizeof(extra) - n, "  \xE2\x80\xA2  effects");
+    if (l.state.batt_pct >= 0)
+        snprintf(extra + n, sizeof(extra) - n, "  \xE2\x80\xA2  %s %d%%",
+                 l.state.ext_power ? LV_SYMBOL_CHARGE : LV_SYMBOL_BATTERY_2, l.state.batt_pct);
+    lv_label_set_text(s_card_info2, extra);
+    lv_label_set_text_fmt(lv_obj_get_child(s_btn_remove, 0), LV_SYMBOL_TRASH "  Remove %s", l.name);
+    bool online = (st == LINK_ONLINE);
+    if (online) lv_obj_remove_state(s_btn_identify, LV_STATE_DISABLED);
+    else        lv_obj_add_state(s_btn_identify, LV_STATE_DISABLED);
 }
 
 void ui_system_set_open(bool open, bool animate)
@@ -229,9 +381,23 @@ void ui_system_set_open(bool open, bool animate)
     if (!s_sheet) return;
     s_open = open;
     int y = open ? SHEET_OPEN_Y : SHEET_CLOSED_Y;
+    if (open) {
+        lv_obj_remove_flag(s_scrim, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_scrim);
+        lv_obj_move_foreground(s_sheet);
+        if (animate) {
+            lv_obj_set_style_opa(s_scrim, LV_OPA_TRANSP, 0);
+            ui_anim_opa(s_scrim, LV_OPA_COVER, 220);
+        } else {
+            lv_obj_set_style_opa(s_scrim, LV_OPA_COVER, 0);
+        }
+        ui_system_refresh();
+    } else {
+        lv_obj_add_flag(s_scrim, LV_OBJ_FLAG_HIDDEN);
+        rename_close();
+    }
     if (animate) ui_anim_y(s_sheet, y, open ? 260 : 200, open ? lv_anim_path_overshoot : lv_anim_path_ease_in_out);
     else lv_obj_set_y(s_sheet, y);
-    if (open) ui_system_refresh();
 }
 
 bool ui_system_is_open(void) { return s_open; }

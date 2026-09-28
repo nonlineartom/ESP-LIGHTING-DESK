@@ -387,6 +387,48 @@ static void test_telink(void)
                                st.hue == 200 && st.sat == 55 && st.intensity == 640);
 }
 
+static void test_telink_fx(void)
+{
+    uint8_t p[10];
+    /* vectors from amaran-hacs tests / encoder */
+    telink_effect(0, 1000, p);  CHECK_BYTES("fx club 1000", p, "96010000000014fa0087", 10);
+    telink_effect(0, 50, p);    CHECK_BYTES("fx club 50", p, "280100000000940c0087", 10);
+    telink_effect(2, 1000, p);  CHECK_BYTES("fx lightning 1000", p, "07010028153016fa0287", 10);
+    telink_effect(6, 1000, p);  CHECK_BYTES("fx strobe 1000", p, "d60100201900fa150687", 10);
+    telink_effect(6, 50, p);    CHECK_BYTES("fx strobe 50", p, "6801002019800c150687", 10);
+    telink_effect(10, 1000, p); CHECK_BYTES("fx welding 1000", p, "1c0140221900fa150a87", 10);
+    telink_effect(14, 50, p);   CHECK_BYTES("fx fireworks 50", p, "360100000000940c0e87", 10);
+    telink_effect_stop(p);      CHECK_BYTES("fx stop", p, "9600000000000000" "0f87", 10);
+    telink_power_request(p);    CHECK_BYTES("power req", p, "0a00000000000000000a", 10);
+
+    /* an effect report is the setter with bit 7 of the type cleared */
+    telink_effect(8, 500, p);
+    p[9] &= 0x7f; p[0] = 0; for (int i = 1; i < 10; i++) p[0] += p[i];
+    telink_effect_status_t fx;
+    CHECK("fx report decode", telink_decode_effect(p, &fx) && fx.fx_id == 8 && fx.on && fx.intensity == 500);
+    telink_effect_stop(p);
+    p[9] &= 0x7f; p[0] = 0; for (int i = 1; i < 10; i++) p[0] += p[i];
+    CHECK("fx report off", telink_decode_effect(p, &fx) && fx.fx_id == TELINK_FX_NONE);
+
+    telink_power_t pw;
+    hex2bin("ae0000226afc1c00000a", p, 10);
+    CHECK("power battery", telink_decode_power(p, &pw) && pw.battery_pct == 53 && pw.battery_minutes == 34 &&
+                           pw.battery_mv == 7420 && pw.external_mv == 0);
+    hex2bin("e7008078c80000c05d0a", p, 10);
+    CHECK("power ac", telink_decode_power(p, &pw) && pw.battery_pct == 100 && pw.battery_minutes == 120 &&
+                      pw.external_mv == 24000);
+    telink_status_t st;
+    CHECK("status rejects fx report", !telink_decode_status(p, &st));
+
+    /* existing encoders against amaran-hacs vectors */
+    telink_intensity(100, p);        CHECK_BYTES("hacs bri 10%", p, "a800000000000000198f", 10);
+    telink_cct(6500, 800, 0, p);     CHECK_BYTES("hacs cct 6500/80", p, "530000000040a128c882", 10);
+    telink_cct(5600, 300, 5, p);     CHECK_BYTES("hacs gm +5", p, "d100000000e001234b82", 10);
+    telink_cct(5600, 300, -5, p);    CHECK_BYTES("hacs gm -5", p, "9000000000a000234b82", 10);
+    telink_cct(20000, 500, 0, p);    CHECK_BYTES("hacs cct+ 20000", p, "020000000044813e7d82", 10);
+    telink_onoff(true, p);           CHECK_BYTES("hacs on", p, "8d00000000000000018c", 10);
+}
+
 static void test_products(void)
 {
     /* UUID captured from an amaran PT2c: "400H5-DBFA30" + 01 0f 0f 0f */
@@ -429,6 +471,7 @@ int main(void)
     test_prov_flow();
     test_cfg();
     test_telink();
+    test_telink_fx();
     test_products();
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

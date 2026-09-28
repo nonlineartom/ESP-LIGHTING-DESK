@@ -72,6 +72,26 @@ bool lights_apply_product_name(light_t *l)
     return true;
 }
 
+bool lights_apply_product_caps(light_t *l)
+{
+    const sidus_product_t *p = sidus_product_for_uuid(l->uuid);
+    if (!p) return false;
+    if (p->cct_min && p->cct_max >= p->cct_min) {
+        l->cct_min = p->cct_min;
+        l->cct_max = p->cct_max;
+    }
+    l->has_hsi = (p->flags & P_HSI) != 0;
+    l->has_gm = (p->flags & P_GM) != 0;
+    l->has_battery = (p->flags & P_BATT) != 0;
+    l->fx_mask = p->fx;
+    return true;
+}
+
+const char *lights_product_name(const light_t *l)
+{
+    return sidus_product_from_uuid(l->uuid);
+}
+
 light_t *lights_add(const uint8_t uuid[16], uint16_t addr, uint8_t elem_count,
                     const uint8_t devkey[16], const char *name)
 {
@@ -103,6 +123,10 @@ light_t *lights_add(const uint8_t uuid[16], uint16_t addr, uint8_t elem_count,
     l->cct_max = 7500;
     l->has_hsi = true;
     l->has_gm = true;
+    l->fx_mask = 0;
+    lights_apply_product_caps(l);
+    l->state.fx = TELINK_FX_NONE;
+    l->state.batt_pct = -1;
     /* sensible defaults until the fixture reports */
     l->state.mode = LIGHT_MODE_CCT;
     l->state.intensity = 500;
@@ -121,6 +145,7 @@ void lights_apply_status(light_t *l, const telink_status_t *st, uint32_t now_ms)
 {
     l->state.on = st->on;
     l->state.intensity = st->intensity;
+    l->state.fx = TELINK_FX_NONE;
     if (st->is_hsi) {
         l->state.mode = LIGHT_MODE_HSI;
         l->state.hue = st->hue;
@@ -176,7 +201,10 @@ void hsv_to_rgb(uint16_t hue, uint8_t sat, uint8_t val, uint8_t *r, uint8_t *g, 
 void light_preview_rgb(const light_t *l, uint8_t *r, uint8_t *g, uint8_t *b)
 {
     uint8_t rr, gg, bb;
-    if (l->state.mode == LIGHT_MODE_HSI) {
+    if (l->state.mode == LIGHT_MODE_FX) {
+        /* effects flicker between presets; show a warm "effect" amber */
+        rr = 255; gg = 150; bb = 60;
+    } else if (l->state.mode == LIGHT_MODE_HSI) {
         hsv_to_rgb(l->state.hue, l->state.sat, 100, &rr, &gg, &bb);
     } else {
         cct_to_rgb(l->state.cct, &rr, &gg, &bb);
