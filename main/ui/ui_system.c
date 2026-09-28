@@ -8,7 +8,7 @@
 #include "app_core.h"
 #include "ui.h"
 
-#define SHEET_H        470
+#define SHEET_H        510
 #define SHEET_OPEN_Y   0
 #define SHEET_CLOSED_Y (-SHEET_H)
 
@@ -19,6 +19,7 @@ static lv_obj_t *s_name_btn, *s_name_lbl;
 static lv_obj_t *s_btn_remove;
 static lv_obj_t *s_btn_reset;
 static lv_obj_t *s_hint;
+static lv_obj_t *s_diag_status;
 static bool      s_open;
 
 static const char *const k_names[] = {
@@ -110,14 +111,8 @@ static void on_diag(lv_event_t *e)
     if (!addr) return;
     high = !high;
     app_cmd_diag_lightness(addr, high ? 0xFFFF : 0x8000, 10 /* 10 x 100 ms */);
-    lv_label_set_text_fmt(s_hint, "diag: lightness %s, 1 s transition", high ? "100%" : "50%");
-    lv_obj_set_style_text_color(s_hint, ui_col_warn, 0);
-}
-
-static void on_sheet_gesture(lv_event_t *e)
-{
-    (void)e;
-    if (lv_indev_get_gesture_dir(lv_indev_active()) == LV_DIR_TOP) ui_system_set_open(false, true);
+    lv_label_set_text_fmt(s_diag_status, "Lightness test: %s", high ? "100%" : "50%");
+    lv_obj_remove_flag(s_diag_status, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void on_handle(lv_event_t *e) { (void)e; ui_system_set_open(false, true); }
@@ -138,32 +133,32 @@ void ui_system_create(lv_obj_t *screen)
     lv_obj_set_style_shadow_opa(s_sheet, LV_OPA_70, 0);
     lv_obj_set_style_pad_all(s_sheet, 0, 0);
     lv_obj_remove_flag(s_sheet, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
-    lv_obj_add_event_cb(s_sheet, on_sheet_gesture, LV_EVENT_GESTURE, NULL);
 
     s_link_icon = lv_label_create(s_sheet);
     lv_label_set_text(s_link_icon, LV_SYMBOL_BLUETOOTH);
     lv_obj_set_style_text_font(s_link_icon, ui_font_title, 0);
-    lv_obj_align(s_link_icon, LV_ALIGN_TOP_MID, 0, 62);
+    lv_obj_align(s_link_icon, LV_ALIGN_TOP_MID, 0, 84);
 
     s_link_text = lv_label_create(s_sheet);
     lv_obj_set_style_text_font(s_link_text, ui_font_normal, 0);
     lv_obj_set_style_text_align(s_link_text, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(s_link_text, 340);
-    lv_obj_align(s_link_text, LV_ALIGN_TOP_MID, 0, 112);
+    lv_obj_set_width(s_link_text, 390);
+    lv_label_set_long_mode(s_link_text, LV_LABEL_LONG_DOT);
+    lv_obj_align(s_link_text, LV_ALIGN_TOP_MID, 0, 134);
 
     s_btn_pair = ui_make_pill(s_sheet, LV_SYMBOL_PLUS "  Pair a light", 300, 56, ui_col_accent, ui_font_normal);
     lv_obj_set_style_text_color(s_btn_pair, ui_col_accent_dark, 0);
-    lv_obj_align(s_btn_pair, LV_ALIGN_TOP_MID, 0, 160);
+    lv_obj_align(s_btn_pair, LV_ALIGN_TOP_MID, 0, 184);
     lv_obj_add_event_cb(s_btn_pair, on_pair, LV_EVENT_CLICKED, NULL);
 
     s_name_btn = ui_make_pill(s_sheet, "Name", 360, 52, ui_col_panel, ui_font_normal);
-    lv_obj_align(s_name_btn, LV_ALIGN_TOP_MID, 0, 234);
+    lv_obj_align(s_name_btn, LV_ALIGN_TOP_MID, 0, 258);
     lv_obj_add_event_cb(s_name_btn, on_name, LV_EVENT_CLICKED, NULL);
     s_name_lbl = lv_obj_get_child(s_name_btn, 0);
 
     s_btn_remove = ui_make_pill(s_sheet, LV_SYMBOL_TRASH "  Remove this light", 360, 52, ui_col_panel, ui_font_normal);
     lv_obj_set_style_text_color(s_btn_remove, ui_col_warn, 0);
-    lv_obj_align(s_btn_remove, LV_ALIGN_TOP_MID, 0, 300);
+    lv_obj_align(s_btn_remove, LV_ALIGN_TOP_MID, 0, 324);
     lv_obj_add_event_cb(s_btn_remove, on_remove, LV_EVENT_CLICKED, NULL);
 
     s_btn_reset = lv_label_create(s_sheet);
@@ -172,17 +167,25 @@ void ui_system_create(lv_obj_t *screen)
     lv_obj_set_style_text_color(s_btn_reset, ui_col_muted, 0);
     lv_obj_set_style_pad_all(s_btn_reset, 10, 0);
     lv_obj_add_flag(s_btn_reset, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_align(s_btn_reset, LV_ALIGN_TOP_MID, 0, 372);
+    lv_obj_align(s_btn_reset, LV_ALIGN_TOP_MID, 0, 400);
     lv_obj_add_event_cb(s_btn_reset, on_reset, LV_EVENT_CLICKED, NULL);
 
     s_hint = lv_label_create(s_sheet);
-    lv_label_set_text(s_hint, "MeshDeck");
-    lv_obj_set_style_text_font(s_hint, ui_font_small, 0);
-    lv_obj_set_style_text_color(s_hint, ui_col_track, 0);
-    lv_obj_align(s_hint, LV_ALIGN_TOP_MID, 0, 24);
+    lv_label_set_text(s_hint, "SYSTEM");
+    lv_obj_set_style_text_font(s_hint, ui_font_medium, 0);
+    lv_obj_set_style_text_color(s_hint, ui_col_text, 0);
+    lv_obj_align(s_hint, LV_ALIGN_TOP_MID, 0, 28);
     lv_obj_set_style_pad_all(s_hint, 12, 0);
     lv_obj_add_flag(s_hint, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_hint, on_diag, LV_EVENT_LONG_PRESSED, NULL);
+
+    s_diag_status = lv_label_create(s_sheet);
+    lv_obj_set_width(s_diag_status, 420);
+    lv_obj_set_style_text_align(s_diag_status, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(s_diag_status, ui_font_small, 0);
+    lv_obj_set_style_text_color(s_diag_status, ui_col_warn, 0);
+    lv_obj_align(s_diag_status, LV_ALIGN_TOP_MID, 0, 447);
+    lv_obj_add_flag(s_diag_status, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *handle = ui_make_handle(s_sheet);
     lv_obj_align(handle, LV_ALIGN_BOTTOM_MID, 0, -14);

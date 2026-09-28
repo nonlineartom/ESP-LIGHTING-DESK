@@ -10,7 +10,7 @@ Phase 1: pair a light from the touchscreen, control power, intensity,
 CCT / green-magenta and HSI colour, and show a live preview of what the
 light is doing.  Phase 2 (front end, done ahead of hardware testing): the
 round lighting desk — a swipeable channel carousel with a grand master,
-ring faders on the rim, and a scenes drawer with save / recall.  See
+vertical level faders, an HSI colour wheel, and a scenes drawer.  See
 `docs/UI_DESIGN.md` and the renders in `docs/ui/`.
 
 ![MeshDeck screens](docs/ui/contact_sheet.png)
@@ -159,15 +159,16 @@ unknown (we bind all of them), and the C6 factory image may lack Bluetooth.
 ## Using the desk
 
 * **Swipe left / right** between the Master page and each light.  Drag the
-  rim ring for intensity (on Master it is the grand master and scales every
-  channel).  Tap the centre disc for power.  CCT / HSI chips switch the lower
-  band between colour temperature + green/magenta arcs and a hue wheel +
-  saturation arc.
-* **Swipe up** for Scenes: tap to recall, long-press to overwrite with the
+  right-hand vertical bar for intensity (on Master it scales every channel).
+  Tap the centre disc for power.  CCT has temperature and G/M sliders; HSI
+  has a colour wheel and a left-hand saturation bar.
+* **Two finger swipe up** or tap **Scenes** to open the drawer: tap to recall,
+  long-press to overwrite with the
   current look, bin to delete, "+" to save the current look.  The **Fade**
   row sets the crossfade (Snap / 1 s / 2 s / 5 s); fades are stepped from the
   controller within a configurable mesh message budget.
-* **Swipe down** for the system sheet: link status, pair a light, rename the
+* **Two finger swipe down** or tap link status for the system sheet: pair a
+  light, rename the
   current light (cycles studio names), remove it, factory reset.
 
 ## Roadmap

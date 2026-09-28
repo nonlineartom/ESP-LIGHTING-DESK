@@ -38,11 +38,11 @@ void ui_show_desk(void);
 void ui_show_pair(void);
 
 /* ---- theme ---------------------------------------------------------------- */
-extern const lv_font_t *ui_font_small;    /* 16 */
-extern const lv_font_t *ui_font_normal;   /* 20 */
-extern const lv_font_t *ui_font_medium;   /* 24 */
-extern const lv_font_t *ui_font_large;    /* 28 */
-extern const lv_font_t *ui_font_title;    /* 36 */
+extern const lv_font_t *ui_font_small;    /* 20 */
+extern const lv_font_t *ui_font_normal;   /* 24 */
+extern const lv_font_t *ui_font_medium;   /* 28 */
+extern const lv_font_t *ui_font_large;    /* 36 */
+extern const lv_font_t *ui_font_title;    /* 48 */
 extern const lv_font_t *ui_font_huge;     /* 48 */
 extern lv_color_t ui_col_bg, ui_col_panel, ui_col_panel_hi, ui_col_track, ui_col_accent,
        ui_col_accent_dark, ui_col_text, ui_col_muted, ui_col_ok, ui_col_warn;
@@ -63,16 +63,6 @@ void      ui_anim_opa(lv_obj_t *obj, lv_opa_t to, uint32_t ms);
 void      ui_breathe(lv_obj_t *obj);        /* quick scale pulse */
 void      ui_fade_bg(lv_obj_t *obj, lv_color_t to, uint32_t ms);
 void      ui_fade_shadow(lv_obj_t *obj, lv_color_t to, uint32_t ms);
-void      ui_arc_ring_style(lv_obj_t *arc, int width, lv_color_t indicator);
-
-/* Text laid along a circle (per-character labels). */
-#define UI_ARC_TEXT_MAX 20
-typedef struct {
-    lv_obj_t *chars[UI_ARC_TEXT_MAX];
-    int n;
-} ui_arc_text_t;
-void ui_arc_text_set(ui_arc_text_t *t, lv_obj_t *parent, const char *text, int cx, int cy,
-                     int radius, int center_angle_deg, const lv_font_t *font, lv_color_t color);
 
 /* ---- screen modules -------------------------------------------------------- */
 void     ui_desk_create(lv_obj_t *screen);

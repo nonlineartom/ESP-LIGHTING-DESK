@@ -71,7 +71,8 @@ Failure points and what they tell us:
 
 ## 2. Control
 
-On the control screen: power, intensity arc, CCT / G-M sliders, HSI.  Each
+On the control screen: power, vertical intensity bar, CCT / G-M sliders,
+HSI colour wheel and saturation bar.  Each
 command logs nothing by itself; the follow-up status request ~1.2 s later
 should log `core: status 0x0002: ...` matching what was sent, and the preview
 disc should follow the reported state.
@@ -82,8 +83,8 @@ disc should follow the reported state.
   in the drawer, recall.  The light should ramp in ~8 steps.  If commands
   get lost (light stops short of the target), lower `FADE_MSGS_PER_SEC` in
   `app_core.c`; if it is perfectly smooth, try raising it.
-* **Diagnostic:** open the system sheet (swipe down) on a light's page and
-  long-press the small "MeshDeck" label at the top.  This sends a standard
+* **Diagnostic:** open the system sheet (two finger swipe down or tap link
+  status) on a light's page and long-press "SYSTEM" at the top.  This sends a standard
   Light Lightness Set with a 1 s transition (alternating 50 % / 100 %).  If
   the fixture dims *smoothly* on its own, the standard model is wired to the
   LEDs after all and fades can be offloaded to the light (one message per

@@ -1,44 +1,47 @@
 /*
  * The desk: a horizontal snap carousel of pages — page 0 is the grand master,
- * the others are one channel per paired light.  Ring controls hug the rim,
- * the preview disc sits in the middle, position dots sit on the bottom rim.
+ * the others are one channel per paired light.  Vertical faders flank the
+ * preview; HSI adds a colour wheel around it.
  */
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "app_core.h"
 #include "ui.h"
 
 #define PAGES_MAX      (LIGHTS_MAX + 1)
-#define RING_SIZE      672
-#define RING_WIDTH     18
-#define DISC_SIZE      224
-#define DISC_CY        338
-#define BAND_SIZE      520
-#define BAND_WIDTH     14
+#define DISC_SIZE      240
+#define DISC_CY        330
 #define SEND_THROTTLE  110
-#define DOT_RADIUS     324
+#define DOT_RADIUS     326
 
 typedef struct {
     lv_obj_t *page;
-    lv_obj_t *ring;           /* intensity / master */
+    lv_obj_t *ring;           /* vertical intensity / master fader */
+    lv_obj_t *level_label;
     lv_obj_t *disc;
     lv_obj_t *value;
     lv_obj_t *sub;            /* small line under the value (mode / status) */
-    ui_arc_text_t name;
+    lv_obj_t *name;
     uint16_t  addr;           /* 0 = master */
 
     /* channel only */
     lv_obj_t *chip_cct, *chip_hsi;
     lv_obj_t *band_cct, *band_hsi;
-    lv_obj_t *arc_cct, *arc_gm, *arc_hue, *arc_sat, *hue_wheel;
-    lv_obj_t *lbl_cct, *lbl_gm, *lbl_hue, *lbl_sat;
+    lv_obj_t *arc_cct, *arc_gm, *arc_sat;
+    lv_obj_t *lbl_cct, *lbl_gm;
+    lv_obj_t *card_gm;
+    lv_obj_t *wheel, *wheel_knob, *sat_value;
+    uint16_t hue_value;
+    lv_point_t disc_press;
+    bool disc_dragged;
     light_mode_t ui_mode;
 
     /* master only */
     lv_obj_t *mosaic[LIGHTS_MAX];
-    lv_obj_t *btn_all_on, *btn_all_off;
+    lv_obj_t *btn_all_on, *btn_all_off, *btn_pair;
     lv_obj_t *preset[3];
 } page_t;
 
@@ -46,7 +49,7 @@ static lv_obj_t *s_scr;
 static lv_obj_t *s_carousel;
 static lv_obj_t *s_link;
 static lv_obj_t *s_dots[PAGES_MAX];
-static lv_obj_t *s_hint_up, *s_hint_down;
+static lv_obj_t *s_hint_up;
 static page_t    s_pages[PAGES_MAX];
 static int       s_page_count;
 static int       s_current;
@@ -84,41 +87,45 @@ static void place_polar(lv_obj_t *obj, int cx, int cy, int radius, double deg)
     lv_obj_set_pos(obj, cx + (int)lround(radius * cos(rad)) - w / 2, cy + (int)lround(radius * sin(rad)) - h / 2);
 }
 
-static void ring_anim_exec(void *obj, int32_t v) { lv_arc_set_value((lv_obj_t *)obj, v); }
+static void ring_anim_exec(void *obj, int32_t v) { lv_slider_set_value((lv_obj_t *)obj, v, LV_ANIM_OFF); }
 
 static void ring_set(lv_obj_t *arc, int value, bool animate)
 {
     if (lv_obj_has_state(arc, LV_STATE_PRESSED)) return;
     lv_anim_delete(arc, ring_anim_exec);
-    if (animate) ui_anim(arc, lv_arc_get_value(arc), value, 300, ring_anim_exec, lv_anim_path_ease_out);
-    else lv_arc_set_value(arc, value);
+    if (animate) ui_anim(arc, lv_slider_get_value(arc), value, 300, ring_anim_exec, lv_anim_path_ease_out);
+    else lv_slider_set_value(arc, value, LV_ANIM_OFF);
 }
 
-/* ------------------------------------------------------------------------- */
-/* hue wheel: custom-drawn rainbow arc under a transparent lv_arc            */
-/* ------------------------------------------------------------------------- */
-
-static void hue_wheel_draw(lv_event_t *e)
+static void slider_set(lv_obj_t *slider, int value)
 {
-    lv_obj_t *obj = lv_event_get_target(e);
+    if (!lv_obj_has_state(slider, LV_STATE_PRESSED)) lv_slider_set_value(slider, value, LV_ANIM_OFF);
+}
+
+static void wheel_place_marker(page_t *pg)
+{
+    double a = pg->hue_value * M_PI / 180.0;
+    lv_obj_set_pos(pg->wheel_knob,
+                   170 + (int)lround(154 * sin(a)) - 15,
+                   170 + (int)lround(154 * cos(a)) - 15);
+}
+
+static void wheel_draw(lv_event_t *e)
+{
+    lv_obj_t *wheel = lv_event_get_target(e);
     lv_layer_t *layer = lv_event_get_layer(e);
-    lv_area_t coords;
-    lv_obj_get_coords(obj, &coords);
-    int cx = (coords.x1 + coords.x2) / 2, cy = (coords.y1 + coords.y2) / 2;
-    int r = lv_area_get_width(&coords) / 2 - BAND_WIDTH / 2 - 2;
-    /* the hue arc spans 105..165 degrees, same as the CCT band */
-    const int seg = 24;
-    for (int i = 0; i < seg; i++) {
+    lv_area_t a;
+    lv_obj_get_coords(wheel, &a);
+    for (int i = 0; i < 72; i++) {
         lv_draw_arc_dsc_t d;
         lv_draw_arc_dsc_init(&d);
-        d.color = lv_color_hsv_to_rgb((uint16_t)(360 * i / seg), 100, 100);
-        d.width = BAND_WIDTH;
-        d.center.x = cx;
-        d.center.y = cy;
-        d.radius = r;
-        d.start_angle = 105 + (60 * i) / seg;
-        d.end_angle = 105 + (60 * (i + 1)) / seg + 1;
-        d.rounded = (i == 0 || i == seg - 1);
+        d.center.x = a.x1 + 170;
+        d.center.y = a.y1 + 170;
+        d.radius = 154;
+        d.width = 26;
+        d.start_angle = i * 5;
+        d.end_angle = (i + 1) * 5 + 1;
+        d.color = lv_color_hsv_to_rgb(i * 5, 100, 100);
         lv_draw_arc(layer, &d);
     }
 }
@@ -129,22 +136,21 @@ static void hue_wheel_draw(lv_event_t *e)
 
 static void send_cct(page_t *pg)
 {
-    app_cmd_set_cct(pg->addr, (uint16_t)lv_arc_get_value(pg->arc_cct), (uint16_t)lv_arc_get_value(pg->ring) * 10,
-                    lv_arc_get_value(pg->arc_gm));
+    app_cmd_set_cct(pg->addr, (uint16_t)lv_slider_get_value(pg->arc_cct), (uint16_t)lv_slider_get_value(pg->ring) * 10,
+                    lv_slider_get_value(pg->arc_gm));
 }
 
 static void send_hsi(page_t *pg)
 {
-    app_cmd_set_hsi(pg->addr, (uint16_t)lv_arc_get_value(pg->arc_hue), (uint8_t)lv_arc_get_value(pg->arc_sat),
-                    (uint16_t)lv_arc_get_value(pg->ring) * 10);
+    app_cmd_set_hsi(pg->addr, pg->hue_value, (uint8_t)lv_slider_get_value(pg->arc_sat),
+                    (uint16_t)lv_slider_get_value(pg->ring) * 10);
 }
 
 static void on_ring(lv_event_t *e)
 {
     page_t *pg = (page_t *)lv_event_get_user_data(e);
-    int v = lv_arc_get_value(pg->ring);
-    if (pg->addr == 0) lv_label_set_text_fmt(pg->value, "%d%%", v);
-    else               lv_label_set_text_fmt(pg->value, "%d%%", v);
+    int v = lv_slider_get_value(pg->ring);
+    lv_label_set_text_fmt(pg->value, "%d%%", v);
     if (s_refreshing || throttled(e)) return;
     if (pg->addr == 0) app_cmd_master_level((uint16_t)v * 10);
     else               app_cmd_set_intensity(pg->addr, (uint16_t)v * 10);
@@ -153,6 +159,20 @@ static void on_ring(lv_event_t *e)
 static void on_disc(lv_event_t *e)
 {
     page_t *pg = (page_t *)lv_event_get_user_data(e);
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_PRESSED) {
+        pg->disc_dragged = false;
+        lv_indev_get_point(lv_indev_active(), &pg->disc_press);
+        return;
+    }
+    if (code == LV_EVENT_PRESSING) {
+        lv_point_t now;
+        lv_indev_get_point(lv_indev_active(), &now);
+        if (abs(now.x - pg->disc_press.x) > 24 || abs(now.y - pg->disc_press.y) > 24)
+            pg->disc_dragged = true;
+        return;
+    }
+    if (pg->disc_dragged) return;
     ui_breathe(pg->disc);
     if (pg->addr == 0) {
         /* master disc: toggle everything (on if any light is off) */
@@ -170,7 +190,7 @@ static void on_disc(lv_event_t *e)
 static void on_cct(lv_event_t *e)
 {
     page_t *pg = (page_t *)lv_event_get_user_data(e);
-    lv_label_set_text_fmt(pg->lbl_cct, "%dK", (int)lv_arc_get_value(pg->arc_cct));
+    lv_label_set_text_fmt(pg->lbl_cct, "%dK", (int)lv_slider_get_value(pg->arc_cct));
     if (s_refreshing || throttled(e)) return;
     send_cct(pg);
 }
@@ -178,16 +198,30 @@ static void on_cct(lv_event_t *e)
 static void on_gm(lv_event_t *e)
 {
     page_t *pg = (page_t *)lv_event_get_user_data(e);
-    int gm = lv_arc_get_value(pg->arc_gm);
-    lv_label_set_text_fmt(pg->lbl_gm, "G/M %s%d", gm > 0 ? "+" : "", gm);
+    int gm = lv_slider_get_value(pg->arc_gm);
+    lv_label_set_text_fmt(pg->lbl_gm, "%s%d", gm > 0 ? "+" : "", gm);
     if (s_refreshing || throttled(e)) return;
     send_cct(pg);
 }
 
-static void on_hue(lv_event_t *e)
+static void on_wheel(lv_event_t *e)
 {
     page_t *pg = (page_t *)lv_event_get_user_data(e);
-    lv_label_set_text_fmt(pg->lbl_hue, "Hue %d\xC2\xB0", (int)lv_arc_get_value(pg->arc_hue));
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) return;
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    lv_area_t a;
+    lv_obj_get_coords(pg->wheel, &a);
+    int dx = p.x - (a.x1 + 170), dy = p.y - (a.y1 + 170);
+    int r2 = dx * dx + dy * dy;
+    if (r2 < 126 * 126 || r2 > 182 * 182) return;
+    double degrees = atan2((double)dx, (double)dy) * 180.0 / M_PI;
+    if (degrees < 0) degrees += 360.0;
+    pg->hue_value = (uint16_t)lround(degrees) % 360;
+    wheel_place_marker(pg);
+    lv_label_set_text_fmt(pg->sub, "%u\xC2\xB0  %d%%", pg->hue_value,
+                          (int)lv_slider_get_value(pg->arc_sat));
     if (s_refreshing || throttled(e)) return;
     send_hsi(pg);
 }
@@ -195,7 +229,7 @@ static void on_hue(lv_event_t *e)
 static void on_sat(lv_event_t *e)
 {
     page_t *pg = (page_t *)lv_event_get_user_data(e);
-    lv_label_set_text_fmt(pg->lbl_sat, "Sat %d%%", (int)lv_arc_get_value(pg->arc_sat));
+    lv_label_set_text_fmt(pg->sat_value, "%d%%", (int)lv_slider_get_value(pg->arc_sat));
     if (s_refreshing || throttled(e)) return;
     send_hsi(pg);
 }
@@ -219,6 +253,8 @@ static void show_mode(page_t *pg, light_mode_t m, bool animate)
     lv_obj_set_style_text_color(lv_obj_get_child(pg->chip_cct, 0), cct ? ui_col_accent_dark : ui_col_text, 0);
     lv_obj_set_style_bg_color(pg->chip_hsi, !cct ? ui_col_accent : ui_col_panel, 0);
     lv_obj_set_style_text_color(lv_obj_get_child(pg->chip_hsi, 0), !cct ? ui_col_accent_dark : ui_col_text, 0);
+    lv_obj_set_y(pg->chip_cct, cct ? 466 : 510);
+    lv_obj_set_y(pg->chip_hsi, cct ? 466 : 510);
 }
 
 static void on_chip_cct(lv_event_t *e)
@@ -239,6 +275,9 @@ static void on_chip_hsi(lv_event_t *e)
 
 static void on_all_on(lv_event_t *e)  { (void)e; app_cmd_all_power(true); }
 static void on_all_off(lv_event_t *e) { (void)e; app_cmd_all_power(false); }
+static void on_pair(lv_event_t *e)    { (void)e; app_cmd_pair_start(); ui_show_pair(); }
+static void on_scenes(lv_event_t *e)  { (void)e; ui_scenes_set_open(true, true); }
+static void on_system(lv_event_t *e)  { (void)e; ui_system_set_open(true, true); }
 static void on_preset(lv_event_t *e)
 {
     uintptr_t k = (uintptr_t)lv_event_get_user_data(e);
@@ -254,8 +293,8 @@ static void update_dots(void)
         bool active = (i == s_current);
         lv_obj_set_size(s_dots[i], active ? 14 : 8, active ? 14 : 8);
         lv_obj_set_style_bg_color(s_dots[i], active ? ui_col_accent : ui_col_muted, 0);
-        double span = 9.0 * (s_page_count - 1);
-        double deg = 90.0 + span / 2 - 9.0 * i;   /* first page on the left */
+        double span = 12.0 * (s_page_count - 1);
+        double deg = 90.0 + span / 2 - 12.0 * i;
         place_polar(s_dots[i], UI_CX, UI_CY, DOT_RADIUS, deg);
     }
 }
@@ -271,21 +310,6 @@ static void on_scroll_end(lv_event_t *e)
         s_current = idx;
         update_dots();
         ui_system_refresh();
-    }
-}
-
-static void on_gesture(lv_event_t *e)
-{
-    lv_obj_t *target = lv_event_get_target(e);
-    /* ignore gestures that started on a ring/arc drag */
-    if (lv_obj_check_type(target, &lv_arc_class)) return;
-    lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_active());
-    if (dir == LV_DIR_TOP) {
-        if (ui_system_is_open()) ui_system_set_open(false, true);
-        else if (!ui_scenes_is_open()) ui_scenes_set_open(true, true);
-    } else if (dir == LV_DIR_BOTTOM) {
-        if (ui_scenes_is_open()) ui_scenes_set_open(false, true);
-        else if (!ui_system_is_open()) ui_system_set_open(true, true);
     }
 }
 
@@ -305,18 +329,43 @@ static lv_obj_t *make_page(void)
     return p;
 }
 
+static lv_obj_t *make_page_title(lv_obj_t *page, const char *title, bool master)
+{
+    lv_obj_t *label = lv_label_create(page);
+    lv_obj_set_width(label, 420);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(label, ui_font_large, 0);
+    lv_obj_set_style_text_color(label, master ? ui_col_accent : ui_col_text, 0);
+    lv_label_set_text(label, title);
+    lv_obj_set_pos(label, 150, 124);
+    return label;
+}
+
 static lv_obj_t *make_ring(lv_obj_t *page, int max, lv_event_cb_t cb, page_t *pg)
 {
-    lv_obj_t *arc = lv_arc_create(page);
-    lv_obj_set_size(arc, RING_SIZE, RING_SIZE);
-    lv_obj_center(arc);
-    lv_arc_set_rotation(arc, 135);
-    lv_arc_set_bg_angles(arc, 0, 270);
-    lv_arc_set_range(arc, 0, max);
-    ui_arc_ring_style(arc, RING_WIDTH, ui_col_accent);
-    lv_obj_add_event_cb(arc, cb, LV_EVENT_VALUE_CHANGED, pg);
-    lv_obj_add_event_cb(arc, cb, LV_EVENT_RELEASED, pg);
-    return arc;
+    pg->level_label = lv_label_create(page);
+    lv_obj_set_width(pg->level_label, 110);
+    lv_obj_set_pos(pg->level_label, 525, 142);
+    lv_obj_set_style_text_align(pg->level_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(pg->level_label, ui_font_small, 0);
+    lv_obj_set_style_text_color(pg->level_label, ui_col_muted, 0);
+    lv_label_set_text(pg->level_label, "LEVEL");
+
+    lv_obj_t *bar = lv_slider_create(page);
+    lv_obj_set_size(bar, 32, 260);
+    lv_obj_set_pos(bar, 564, 215);
+    lv_slider_set_range(bar, 0, max);
+    lv_obj_set_style_radius(bar, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_radius(bar, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(bar, ui_col_track, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bar, ui_col_accent, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(bar, ui_col_text, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(bar, 8, LV_PART_KNOB);
+    lv_obj_set_ext_click_area(bar, 20);
+    lv_obj_add_event_cb(bar, cb, LV_EVENT_VALUE_CHANGED, pg);
+    lv_obj_add_event_cb(bar, cb, LV_EVENT_RELEASED, pg);
+    return bar;
 }
 
 static lv_obj_t *make_disc(lv_obj_t *page, page_t *pg)
@@ -334,6 +383,8 @@ static lv_obj_t *make_disc(lv_obj_t *page, page_t *pg)
     lv_obj_set_style_pad_all(disc, 0, 0);
     lv_obj_remove_flag(disc, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(disc, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(disc, on_disc, LV_EVENT_PRESSED, pg);
+    lv_obj_add_event_cb(disc, on_disc, LV_EVENT_PRESSING, pg);
     lv_obj_add_event_cb(disc, on_disc, LV_EVENT_CLICKED, pg);
 
     pg->value = lv_label_create(disc);
@@ -345,21 +396,6 @@ static lv_obj_t *make_disc(lv_obj_t *page, page_t *pg)
     lv_obj_set_style_text_color(pg->sub, ui_col_bg, 0);
     lv_obj_align(pg->sub, LV_ALIGN_CENTER, 0, 30);
     return disc;
-}
-
-static lv_obj_t *make_band_arc(lv_obj_t *band, int rot, int min, int max, lv_event_cb_t cb, page_t *pg,
-                               lv_color_t color)
-{
-    lv_obj_t *arc = lv_arc_create(band);
-    lv_obj_set_size(arc, BAND_SIZE, BAND_SIZE);
-    lv_obj_center(arc);
-    lv_arc_set_rotation(arc, rot);
-    lv_arc_set_bg_angles(arc, 0, 60);
-    lv_arc_set_range(arc, min, max);
-    ui_arc_ring_style(arc, BAND_WIDTH, color);
-    lv_obj_add_event_cb(arc, cb, LV_EVENT_VALUE_CHANGED, pg);
-    lv_obj_add_event_cb(arc, cb, LV_EVENT_RELEASED, pg);
-    return arc;
 }
 
 static lv_obj_t *make_band(lv_obj_t *page)
@@ -374,16 +410,102 @@ static lv_obj_t *make_band(lv_obj_t *page)
     return b;
 }
 
-static lv_obj_t *make_band_label(lv_obj_t *band, double deg)
+static void make_hsi_tools(page_t *pg)
 {
-    lv_obj_t *l = lv_label_create(band);
-    lv_obj_set_style_text_font(l, ui_font_small, 0);
-    lv_obj_set_style_text_color(l, ui_col_muted, 0);
-    lv_obj_set_size(l, 96, 22);
-    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
-    /* inside the band's sweep, clear of the chips in the middle */
-    place_polar(l, UI_CX, UI_CY, 206, deg);
-    return l;
+    pg->band_hsi = make_band(pg->page);
+    pg->wheel = lv_obj_create(pg->band_hsi);
+    lv_obj_set_size(pg->wheel, 340, 340);
+    lv_obj_set_pos(pg->wheel, 190, 160);
+    lv_obj_set_style_bg_opa(pg->wheel, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(pg->wheel, 0, 0);
+    lv_obj_set_style_pad_all(pg->wheel, 0, 0);
+    lv_obj_remove_flag(pg->wheel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(pg->wheel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(pg->wheel, wheel_draw, LV_EVENT_DRAW_MAIN, NULL);
+    lv_obj_add_event_cb(pg->wheel, on_wheel, LV_EVENT_PRESSED, pg);
+    lv_obj_add_event_cb(pg->wheel, on_wheel, LV_EVENT_PRESSING, pg);
+    lv_obj_add_event_cb(pg->wheel, on_wheel, LV_EVENT_RELEASED, pg);
+
+    pg->wheel_knob = lv_obj_create(pg->wheel);
+    lv_obj_set_size(pg->wheel_knob, 30, 30);
+    lv_obj_set_style_radius(pg->wheel_knob, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(pg->wheel_knob, ui_col_text, 0);
+    lv_obj_set_style_border_width(pg->wheel_knob, 3, 0);
+    lv_obj_set_style_border_color(pg->wheel_knob, ui_col_bg, 0);
+    lv_obj_remove_flag(pg->wheel_knob, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    wheel_place_marker(pg);
+
+    lv_obj_t *caption = lv_label_create(pg->band_hsi);
+    lv_label_set_text(caption, "SAT");
+    lv_obj_set_width(caption, 100);
+    lv_obj_set_pos(caption, 85, 142);
+    lv_obj_set_style_text_align(caption, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(caption, ui_font_small, 0);
+    lv_obj_set_style_text_color(caption, ui_col_muted, 0);
+
+    pg->arc_sat = lv_slider_create(pg->band_hsi);
+    lv_obj_set_size(pg->arc_sat, 32, 260);
+    lv_obj_set_pos(pg->arc_sat, 119, 215);
+    lv_slider_set_range(pg->arc_sat, 0, 100);
+    lv_obj_set_style_radius(pg->arc_sat, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_radius(pg->arc_sat, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(pg->arc_sat, ui_col_track, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(pg->arc_sat, lv_color_hex(0xe58abb), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(pg->arc_sat, ui_col_text, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(pg->arc_sat, 8, LV_PART_KNOB);
+    lv_obj_set_ext_click_area(pg->arc_sat, 18);
+    lv_obj_add_event_cb(pg->arc_sat, on_sat, LV_EVENT_VALUE_CHANGED, pg);
+    lv_obj_add_event_cb(pg->arc_sat, on_sat, LV_EVENT_RELEASED, pg);
+
+    pg->sat_value = lv_label_create(pg->band_hsi);
+    lv_obj_set_width(pg->sat_value, 100);
+    lv_obj_set_pos(pg->sat_value, 85, 503);
+    lv_obj_set_style_text_align(pg->sat_value, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(pg->sat_value, ui_font_small, 0);
+    lv_obj_set_style_text_color(pg->sat_value, ui_col_text, 0);
+}
+
+static lv_obj_t *make_control(lv_obj_t *band, int x, const char *caption, int min, int max,
+                              lv_color_t color, lv_event_cb_t cb, page_t *pg,
+                              lv_obj_t **value, lv_obj_t **slider)
+{
+    lv_obj_t *card = lv_obj_create(band);
+    lv_obj_set_size(card, 190, 98);
+    lv_obj_set_pos(card, x, 520);
+    lv_obj_set_style_radius(card, 22, 0);
+    lv_obj_set_style_bg_color(card, ui_col_panel, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_color(card, ui_col_panel_hi, 0);
+    lv_obj_set_style_pad_all(card, 0, 0);
+    lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *title = lv_label_create(card);
+    lv_label_set_text(title, caption);
+    lv_obj_set_style_text_font(title, ui_font_small, 0);
+    lv_obj_set_style_text_color(title, ui_col_muted, 0);
+    lv_obj_set_pos(title, 16, 13);
+
+    *value = lv_label_create(card);
+    lv_obj_set_width(*value, 106);
+    lv_obj_set_style_text_align(*value, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_style_text_font(*value, ui_font_normal, 0);
+    lv_obj_set_style_text_color(*value, ui_col_text, 0);
+    lv_obj_set_pos(*value, 68, 10);
+
+    *slider = lv_slider_create(card);
+    lv_obj_set_size(*slider, 150, 14);
+    lv_obj_set_pos(*slider, 20, 63);
+    lv_slider_set_range(*slider, min, max);
+    lv_obj_set_style_radius(*slider, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_radius(*slider, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(*slider, ui_col_track, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(*slider, color, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(*slider, ui_col_text, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(*slider, 7, LV_PART_KNOB);
+    lv_obj_set_ext_click_area(*slider, 12);
+    lv_obj_add_event_cb(*slider, cb, LV_EVENT_VALUE_CHANGED, pg);
+    lv_obj_add_event_cb(*slider, cb, LV_EVENT_RELEASED, pg);
+    return card;
 }
 
 static void build_channel(page_t *pg, const light_t *l)
@@ -391,39 +513,24 @@ static void build_channel(page_t *pg, const light_t *l)
     pg->page = make_page();
     pg->addr = l->addr;
     pg->ring = make_ring(pg->page, 100, on_ring, pg);
+    pg->hue_value = l->state.hue;
+    make_hsi_tools(pg);
     pg->disc = make_disc(pg->page, pg);
-    ui_arc_text_set(&pg->name, pg->page, l->name, UI_CX, DISC_CY, 148, -90, ui_font_medium, ui_col_text);
+    pg->name = make_page_title(pg->page, l->name, false);
 
     pg->chip_cct = ui_make_pill(pg->page, "CCT", 100, 40, ui_col_panel, ui_font_normal);
-    lv_obj_set_pos(pg->chip_cct, UI_CX - 104, 470);
+    lv_obj_set_pos(pg->chip_cct, UI_CX - 108, 466);
     lv_obj_add_event_cb(pg->chip_cct, on_chip_cct, LV_EVENT_CLICKED, pg);
     pg->chip_hsi = ui_make_pill(pg->page, "HSI", 100, 40, ui_col_panel, ui_font_normal);
-    lv_obj_set_pos(pg->chip_hsi, UI_CX + 4, 470);
+    lv_obj_set_pos(pg->chip_hsi, UI_CX + 8, 466);
     lv_obj_add_event_cb(pg->chip_hsi, on_chip_hsi, LV_EVENT_CLICKED, pg);
 
-    /* CCT band: temperature lower-left, green/magenta lower-right */
+    /* Two fixed control cards keep values and touch targets clear of the rim. */
     pg->band_cct = make_band(pg->page);
-    pg->arc_cct = make_band_arc(pg->band_cct, 105, l->cct_min, l->cct_max, on_cct, pg, lv_color_hex(0xffd28a));
-    pg->arc_gm  = make_band_arc(pg->band_cct, 15, -10, 10, on_gm, pg, lv_color_hex(0xc6f27a));
-    lv_arc_set_mode(pg->arc_gm, LV_ARC_MODE_SYMMETRICAL);
-    pg->lbl_cct = make_band_label(pg->band_cct, 151);
-    pg->lbl_gm  = make_band_label(pg->band_cct, 29);
-
-    /* HSI band: hue wheel lower-left, saturation lower-right */
-    pg->band_hsi = make_band(pg->page);
-    pg->hue_wheel = lv_obj_create(pg->band_hsi);
-    lv_obj_set_size(pg->hue_wheel, BAND_SIZE, BAND_SIZE);
-    lv_obj_center(pg->hue_wheel);
-    lv_obj_set_style_bg_opa(pg->hue_wheel, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(pg->hue_wheel, 0, 0);
-    lv_obj_remove_flag(pg->hue_wheel, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(pg->hue_wheel, hue_wheel_draw, LV_EVENT_DRAW_MAIN, NULL);
-    pg->arc_hue = make_band_arc(pg->band_hsi, 105, 0, 360, on_hue, pg, ui_col_accent);
-    lv_obj_set_style_arc_opa(pg->arc_hue, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_arc_opa(pg->arc_hue, LV_OPA_TRANSP, LV_PART_INDICATOR);
-    pg->arc_sat = make_band_arc(pg->band_hsi, 15, 0, 100, on_sat, pg, lv_color_hex(0xff7ab8));
-    pg->lbl_hue = make_band_label(pg->band_hsi, 151);
-    pg->lbl_sat = make_band_label(pg->band_hsi, 29);
+    make_control(pg->band_cct, 165, "TEMP", l->cct_min, l->cct_max,
+                 lv_color_hex(0xffcc7e), on_cct, pg, &pg->lbl_cct, &pg->arc_cct);
+    pg->card_gm = make_control(pg->band_cct, 365, "G/M", -10, 10,
+                               lv_color_hex(0x9ddd9d), on_gm, pg, &pg->lbl_gm, &pg->arc_gm);
 
     show_mode(pg, l->state.mode, false);
 }
@@ -435,7 +542,7 @@ static void build_master(page_t *pg)
     pg->ring = make_ring(pg->page, 100, on_ring, pg);
     pg->disc = make_disc(pg->page, pg);
     lv_obj_set_style_bg_color(pg->disc, ui_col_panel, 0);
-    ui_arc_text_set(&pg->name, pg->page, "MASTER", UI_CX, DISC_CY, 148, -90, ui_font_medium, ui_col_accent);
+    pg->name = make_page_title(pg->page, "MASTER", true);
 
     /* mosaic of the lights inside the disc */
     for (int i = 0; i < LIGHTS_MAX; i++) {
@@ -449,25 +556,28 @@ static void build_master(page_t *pg)
         lv_obj_add_flag(m, LV_OBJ_FLAG_HIDDEN);
         pg->mosaic[i] = m;
     }
-    lv_obj_align(pg->value, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_text_font(pg->value, ui_font_title, 0);
+    lv_obj_align(pg->value, LV_ALIGN_CENTER, 0, -22);
+    lv_obj_set_style_text_font(pg->value, ui_font_huge, 0);
     lv_obj_set_style_text_color(pg->value, ui_col_text, 0);
     lv_obj_add_flag(pg->sub, LV_OBJ_FLAG_HIDDEN);
 
     pg->btn_all_on = ui_make_pill(pg->page, "All on", 124, 40, ui_col_panel, ui_font_normal);
-    lv_obj_set_pos(pg->btn_all_on, UI_CX - 130, 480);
+    lv_obj_set_pos(pg->btn_all_on, UI_CX - 134, 468);
     lv_obj_add_event_cb(pg->btn_all_on, on_all_on, LV_EVENT_CLICKED, NULL);
     pg->btn_all_off = ui_make_pill(pg->page, "All off", 124, 40, ui_col_panel, ui_font_normal);
-    lv_obj_set_pos(pg->btn_all_off, UI_CX + 6, 480);
+    lv_obj_set_pos(pg->btn_all_off, UI_CX + 10, 468);
     lv_obj_add_event_cb(pg->btn_all_off, on_all_off, LV_EVENT_CLICKED, NULL);
+    pg->btn_pair = ui_make_pill(pg->page, LV_SYMBOL_PLUS "  Pair a light", 240, 56, ui_col_accent, ui_font_normal);
+    lv_obj_set_pos(pg->btn_pair, 240, 496);
+    lv_obj_set_style_text_color(lv_obj_get_child(pg->btn_pair, 0), ui_col_accent_dark, 0);
+    lv_obj_add_event_cb(pg->btn_pair, on_pair, LV_EVENT_CLICKED, NULL);
 
     static const uint16_t presets[3] = { 3200, 4300, 5600 };
-    static const double angles[3] = { 122, 90, 58 };
     for (int i = 0; i < 3; i++) {
         char t[8];
         snprintf(t, sizeof(t), "%dK", presets[i]);
-        pg->preset[i] = ui_make_pill(pg->page, t, 96, 40, ui_col_panel, ui_font_small);
-        place_polar(pg->preset[i], UI_CX, UI_CY, 218, angles[i]);
+        pg->preset[i] = ui_make_pill(pg->page, t, 104, 48, ui_col_panel, ui_font_small);
+        lv_obj_set_pos(pg->preset[i], 192 + i * 116, 542);
         lv_obj_add_event_cb(pg->preset[i], on_preset, LV_EVENT_CLICKED, (void *)(uintptr_t)presets[i]);
     }
 }
@@ -495,9 +605,11 @@ static void refresh_channel(page_t *pg, bool animate)
         lv_obj_set_style_shadow_color(pg->disc, c, 0);
     }
     lv_obj_set_style_shadow_opa(pg->disc, st->on ? LV_OPA_70 : LV_OPA_TRANSP, 0);
-    lv_color_t ink = st->on ? ui_col_bg : ui_col_muted;
+    int luminance = (r * 299 + g * 587 + b * 114) / 1000;
+    lv_color_t ink = st->on ? (luminance < 150 ? ui_col_text : ui_col_bg) : ui_col_muted;
     lv_obj_set_style_text_color(pg->value, ink, 0);
     lv_obj_set_style_text_color(pg->sub, ink, 0);
+    lv_label_set_text(pg->name, l.name);
 
     if (!lv_obj_has_state(pg->ring, LV_STATE_PRESSED)) {
         ring_set(pg->ring, st->level / 10, animate);
@@ -509,30 +621,30 @@ static void refresh_channel(page_t *pg, bool animate)
     else lv_label_set_text_fmt(pg->sub, "%uK %s%d", st->cct, st->gm > 0 ? "+" : "", st->gm);
 
     if (st->reported && st->mode != pg->ui_mode && !lv_obj_has_state(pg->arc_cct, LV_STATE_PRESSED) &&
-        !lv_obj_has_state(pg->arc_hue, LV_STATE_PRESSED)) {
+        !lv_obj_has_state(pg->wheel, LV_STATE_PRESSED)) {
         show_mode(pg, st->mode, animate);
     }
-    lv_arc_set_range(pg->arc_cct, l.cct_min, l.cct_max);
+    lv_slider_set_range(pg->arc_cct, l.cct_min, l.cct_max);
     if (!lv_obj_has_state(pg->arc_cct, LV_STATE_PRESSED)) {
-        ring_set(pg->arc_cct, st->cct, animate);
+        slider_set(pg->arc_cct, st->cct);
         lv_label_set_text_fmt(pg->lbl_cct, "%uK", st->cct);
     }
     if (!lv_obj_has_state(pg->arc_gm, LV_STATE_PRESSED)) {
-        ring_set(pg->arc_gm, st->gm, animate);
-        lv_label_set_text_fmt(pg->lbl_gm, "G/M %s%d", st->gm > 0 ? "+" : "", st->gm);
+        slider_set(pg->arc_gm, st->gm);
+        lv_label_set_text_fmt(pg->lbl_gm, "%s%d", st->gm > 0 ? "+" : "", st->gm);
     }
-    if (!lv_obj_has_state(pg->arc_hue, LV_STATE_PRESSED)) {
-        ring_set(pg->arc_hue, st->hue, animate);
-        lv_label_set_text_fmt(pg->lbl_hue, "Hue %u\xC2\xB0", st->hue);
+    if (!lv_obj_has_state(pg->wheel, LV_STATE_PRESSED)) {
+        pg->hue_value = st->hue;
+        wheel_place_marker(pg);
     }
     if (!lv_obj_has_state(pg->arc_sat, LV_STATE_PRESSED)) {
-        ring_set(pg->arc_sat, st->sat, animate);
-        lv_label_set_text_fmt(pg->lbl_sat, "Sat %u%%", st->sat);
+        slider_set(pg->arc_sat, st->sat);
+        lv_label_set_text_fmt(pg->sat_value, "%u%%", st->sat);
     }
     if (l.has_hsi) lv_obj_remove_flag(pg->chip_hsi, LV_OBJ_FLAG_HIDDEN);
     else           lv_obj_add_flag(pg->chip_hsi, LV_OBJ_FLAG_HIDDEN);
-    if (l.has_gm)  { lv_obj_remove_flag(pg->arc_gm, LV_OBJ_FLAG_HIDDEN); lv_obj_remove_flag(pg->lbl_gm, LV_OBJ_FLAG_HIDDEN); }
-    else           { lv_obj_add_flag(pg->arc_gm, LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(pg->lbl_gm, LV_OBJ_FLAG_HIDDEN); }
+    if (l.has_gm) lv_obj_remove_flag(pg->card_gm, LV_OBJ_FLAG_HIDDEN);
+    else          lv_obj_add_flag(pg->card_gm, LV_OBJ_FLAG_HIDDEN);
     s_refreshing = false;
 }
 
@@ -554,8 +666,9 @@ static void refresh_master(page_t *pg, bool animate)
         if (animate) ui_fade_bg(m, c, 300); else lv_obj_set_style_bg_color(m, c, 0);
         lv_obj_set_style_shadow_color(m, c, 0);
         lv_obj_set_style_shadow_opa(m, l->state.on ? LV_OPA_50 : LV_OPA_TRANSP, 0);
-        double deg = -90 + 360.0 * k / n;
-        place_polar(m, DISC_SIZE / 2 - 15, DISC_SIZE / 2 - 15, n == 1 ? 0 : 84, deg);
+        int dot_size = n > 6 ? 18 : 24;
+        lv_obj_set_size(m, dot_size, dot_size);
+        lv_obj_set_pos(m, (DISC_SIZE - n * (dot_size + 4) + 4) / 2 + k * (dot_size + 4), 168);
         if (l->state.on) on++;
         k++;
     }
@@ -574,15 +687,21 @@ static void refresh_master(page_t *pg, bool animate)
     if (n == 0) { lv_obj_add_flag(pg->btn_all_on, LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(pg->btn_all_off, LV_OBJ_FLAG_HIDDEN); }
     else        { lv_obj_remove_flag(pg->btn_all_on, LV_OBJ_FLAG_HIDDEN); lv_obj_remove_flag(pg->btn_all_off, LV_OBJ_FLAG_HIDDEN); }
     if (n == 0) {
+        lv_obj_add_flag(pg->ring, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(pg->level_label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(pg->btn_pair, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(pg->value, "");
         lv_obj_remove_flag(pg->sub, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_text_color(pg->sub, ui_col_muted, 0);
-        lv_label_set_text(pg->sub, "no lights\nswipe down to pair");
+        lv_label_set_text(pg->sub, "No lights paired");
         lv_obj_set_style_text_align(pg->sub, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_align(pg->sub, LV_ALIGN_CENTER, 0, 0);
     } else {
+        lv_obj_remove_flag(pg->ring, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(pg->level_label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(pg->btn_pair, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(pg->sub, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_align(pg->value, LV_ALIGN_CENTER, 0, n <= 1 ? 0 : 0);
+        lv_obj_align(pg->value, LV_ALIGN_CENTER, 0, -22);
         lv_obj_set_style_text_color(pg->value, on ? ui_col_text : ui_col_muted, 0);
     }
     s_refreshing = false;
@@ -595,7 +714,7 @@ void ui_desk_refresh_link(void)
     lv_color_t col = ui_col_muted;
     if (st == LINK_ONLINE) col = ui_col_ok;
     else if (st == LINK_SCANNING || st == LINK_CONNECTING || st == LINK_PAIRING) col = ui_col_accent;
-    lv_label_set_text_fmt(s_link, LV_SYMBOL_BLUETOOTH "  %s", app_core_link_text());
+    lv_label_set_text_fmt(s_link, LV_SYMBOL_BLUETOOTH "  %s  " LV_SYMBOL_DOWN, app_core_link_text());
     lv_obj_set_style_text_color(s_link, col, 0);
 }
 
@@ -683,19 +802,16 @@ void ui_desk_create(lv_obj_t *screen)
     s_link = lv_label_create(screen);
     lv_obj_set_style_text_font(s_link, ui_font_small, 0);
     lv_obj_set_style_text_color(s_link, ui_col_muted, 0);
-    lv_obj_align(s_link, LV_ALIGN_TOP_MID, 0, 46);
-    lv_obj_remove_flag(s_link, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_width(s_link, 430);
+    lv_obj_set_style_text_align(s_link, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_pad_all(s_link, 10, 0);
+    lv_obj_align(s_link, LV_ALIGN_TOP_MID, 0, 80);
+    lv_obj_add_flag(s_link, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_link, on_system, LV_EVENT_CLICKED, NULL);
 
-    s_hint_down = lv_label_create(screen);
-    lv_label_set_text(s_hint_down, LV_SYMBOL_DOWN);
-    lv_obj_set_style_text_font(s_hint_down, ui_font_small, 0);
-    lv_obj_set_style_text_color(s_hint_down, ui_col_track, 0);
-    lv_obj_align(s_hint_down, LV_ALIGN_TOP_MID, 0, 22);
-    s_hint_up = lv_label_create(screen);
-    lv_label_set_text(s_hint_up, LV_SYMBOL_UP);
-    lv_obj_set_style_text_font(s_hint_up, ui_font_small, 0);
-    lv_obj_set_style_text_color(s_hint_up, ui_col_track, 0);
-    lv_obj_align(s_hint_up, LV_ALIGN_BOTTOM_MID, 0, -4);
+    s_hint_up = ui_make_pill(screen, "SCENES  " LV_SYMBOL_UP, 172, 48, ui_col_panel_hi, ui_font_small);
+    lv_obj_set_pos(s_hint_up, 274, 628);
+    lv_obj_add_event_cb(s_hint_up, on_scenes, LV_EVENT_CLICKED, NULL);
 
     for (int i = 0; i < PAGES_MAX; i++) {
         lv_obj_t *d = lv_obj_create(screen);
@@ -708,7 +824,6 @@ void ui_desk_create(lv_obj_t *screen)
         s_dots[i] = d;
     }
 
-    lv_obj_add_event_cb(screen, on_gesture, LV_EVENT_GESTURE, NULL);
     s_light_count_built = 0xffffffff;
     ui_desk_rebuild();
 }

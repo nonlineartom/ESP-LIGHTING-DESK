@@ -48,16 +48,16 @@ static void build(void)
 
     lv_obj_t *title = lv_label_create(s_scr);
     lv_label_set_text(title, "Pair a light");
-    lv_obj_set_style_text_font(title, ui_font_large, 0);
+    lv_obj_set_style_text_font(title, ui_font_title, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 74);
 
     s_hint = lv_label_create(s_scr);
-    lv_label_set_text(s_hint, "Remove the light from Sidus Link\n(or factory-reset it) so it advertises.\nLights ready to pair appear below.");
+    lv_label_set_text(s_hint, "Remove the light from Sidus Link\nor reset it, then switch it on nearby.");
     lv_obj_set_style_text_align(s_hint, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(s_hint, ui_font_small, 0);
     lv_obj_set_style_text_color(s_hint, ui_col_muted, 0);
     lv_obj_set_width(s_hint, 460);
-    lv_obj_align(s_hint, LV_ALIGN_TOP_MID, 0, 122);
+    lv_obj_align(s_hint, LV_ALIGN_TOP_MID, 0, 138);
 
     s_spinner = lv_spinner_create(s_scr);
     lv_obj_set_size(s_spinner, 36, 36);
@@ -66,11 +66,11 @@ static void build(void)
     lv_obj_set_style_arc_color(s_spinner, ui_col_track, LV_PART_MAIN);
     lv_obj_set_style_arc_width(s_spinner, 4, LV_PART_INDICATOR);
     lv_obj_set_style_arc_width(s_spinner, 4, LV_PART_MAIN);
-    lv_obj_align(s_spinner, LV_ALIGN_TOP_MID, 0, 206);
+    lv_obj_align(s_spinner, LV_ALIGN_TOP_MID, 0, 220);
 
     s_list = lv_obj_create(s_scr);
     lv_obj_set_size(s_list, 500, 300);
-    lv_obj_align(s_list, LV_ALIGN_TOP_MID, 0, 254);
+    lv_obj_align(s_list, LV_ALIGN_TOP_MID, 0, 270);
     lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
     lv_obj_set_style_pad_all(s_list, 4, 0);
