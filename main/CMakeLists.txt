@@ -1,0 +1,35 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "board.c"
+        "ble_central.c"
+        "mesh_crypto.c"
+        "mesh_net.c"
+        "mesh_prov.c"
+        "mesh_cfg.c"
+        "telink.c"
+        "lights.c"
+        "store.c"
+        "app_core.c"
+        "ui/ui.c"
+        "ui/ui_home.c"
+        "ui/ui_pair.c"
+        "ui/ui_control.c"
+    INCLUDE_DIRS "." "ui"
+    REQUIRES
+        bt
+        nvs_flash
+        esp_hosted
+        esp_wifi_remote
+        esp_lcd
+        esp_lvgl_port
+        esp_lcd_touch
+        esp_lcd_touch_gt911
+        esp_lcd_jd9365
+        lvgl
+        mbedtls
+        esp_timer
+        esp_driver_gpio
+        esp_driver_i2c
+        esp_driver_ledc
+)

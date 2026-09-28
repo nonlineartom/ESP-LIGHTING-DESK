@@ -1,0 +1,9 @@
+[submodule "components/lvgl"]
+	path = components/lvgl
+	url = https://github.com/lvgl/lvgl.git
+[submodule "components/esp_hosted"]
+	path = components/esp_hosted
+	url = https://github.com/espressif/esp-hosted-mcu.git
+[submodule "components/esp-wifi-remote"]
+	path = components/esp-wifi-remote
+	url = https://github.com/espressif/esp-wifi-remote.git
